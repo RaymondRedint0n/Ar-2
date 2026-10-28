@@ -1,0 +1,52 @@
+name: Дата на табличке
+
+on:
+  schedule:
+    - cron: '5 19 * * *'      # 19:05 UTC = 00:05 по Екатеринбургу, каждый день
+  push:
+    branches: [main]           # пересобрать сразу после загрузки файлов
+  workflow_dispatch:           # кнопка «Run workflow» для ручного запуска
+
+permissions:
+  contents: write              # записать last_build.txt (чтобы GitHub не отключил расписание)
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Собрать модель с сегодняшней датой
+        run: |
+          which ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+          pip install --quiet trimesh numpy pillow usd-core scipy
+          python build_date.py
+
+      - name: Отметить дату сборки
+        if: github.event_name == 'schedule'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add last_build.txt
+          git commit -m "Дата на табличке: $(cat last_build.txt)" || echo "без изменений"
+          git push || echo "push пропущен"
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
