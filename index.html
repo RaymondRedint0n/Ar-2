@@ -1,0 +1,1420 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AR-фото: Электромашина</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Manrope:wght@400;600&display=swap">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.3.1/dist/model-viewer.min.js"></script>
+<style>
+/* Layout: one screen — 3D-сцена во весь блок, под ней кнопка AR и короткая памятка */
+:root{
+  --bg:#141518; --panel:#1d1f23; --line:#2c2f35; --fg:#ece9e4; --muted:#9a9ca3;
+  --accent:#f26b14; --accent-ink:#1a0d03;
+  --display:"Oswald","Arial Narrow",Arial,sans-serif;
+  --body:"Manrope",system-ui,-apple-system,"Segoe UI",sans-serif;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.5}
+img{max-width:100%}
+[hidden]{display:none!important}
+.wrap{max-width:760px;margin:0 auto;padding-block:20px 28px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:16px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+h1{font-family:var(--display);font-weight:600;font-size:clamp(24px,6vw,34px);letter-spacing:.02em;text-transform:uppercase;margin:0;text-wrap:balance}
+h1 span{color:var(--accent)}
+.spec{font-size:12px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;font-variant-numeric:tabular-nums}
+.stage{position:relative;border:1px solid var(--line);border-radius:6px;overflow:hidden;
+  background:radial-gradient(120% 80% at 50% 100%,#2a2219 0%,var(--panel) 55%,var(--bg) 100%)}
+model-viewer{width:100%;height:min(68vh,620px);min-height:380px;display:block;--poster-color:transparent;--progress-bar-color:var(--accent)}
+.ar-btn{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);border:0;border-radius:4px;
+  background:var(--accent);color:var(--accent-ink);font-family:var(--display);font-size:17px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;padding:12px 22px;cursor:pointer;white-space:nowrap}
+.ar-btn:focus-visible,.btn:focus-visible{outline:2px solid var(--fg);outline-offset:3px}
+.hint{position:absolute;top:12px;left:12px;font-size:12px;color:var(--muted);background:rgba(20,21,24,.7);padding:4px 8px;border-radius:3px}
+.status{font-size:14px;color:var(--muted);margin:0}
+.status b{color:var(--fg)}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.step{border-top:2px solid var(--line);padding-top:10px;min-width:0}
+.step h2{font-family:var(--display);font-weight:500;font-size:15px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 4px;color:var(--accent)}
+.step p{margin:0;color:var(--fg);font-size:14px}
+.fallback{border:1px solid var(--line);border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:10px;background:var(--panel)}
+.fb-title{margin:0;font-weight:600}
+.fb-text{margin:0;color:var(--muted);font-size:14px}
+.fb-text:empty{display:none}
+.fb-list{display:flex;flex-direction:column;gap:8px}
+.btn{display:block;text-align:center;border:1px solid var(--accent);background:transparent;color:var(--fg);font:600 15px/1.3 var(--body);padding:11px 14px;border-radius:4px;text-decoration:none;cursor:pointer}
+.btn.ghost{border-color:var(--line);color:var(--muted)}
+@media (prefers-reduced-motion:reduce){model-viewer{--auto-rotate:none}}
+model-viewer::part(default-ar-button){display:none}
+.live-preview{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:pan-y;cursor:grab}
+.mv-hidden{opacity:0;pointer-events:none}
+/* «Поставить в комнату»: свой AR (WebXR) или камера + гироскоп */
+.xr .xr-canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.xr.webxr{background:transparent}
+.xr.webxr video,.xr.webxr:not(.xr-shot) .shutter,.xr.webxr:not(.xr-shot) #xrTimer{display:none}
+.xr.webxr .xr-canvas{opacity:0;pointer-events:none}
+.xr.mirror .xr-canvas{transform:scaleX(-1)}
+.xr .cam-tip{transition:opacity .3s}
+.xr-escape{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 110px);border:1px solid rgba(255,255,255,.5);
+  background:rgba(0,0,0,.55);color:#fff;font:600 14px/1.2 var(--body);padding:11px 16px;border-radius:4px;cursor:pointer;white-space:nowrap}
+.xr-escape:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.photo-btn{display:flex;flex-direction:column;align-items:center;gap:2px;width:100%;border:1px solid var(--accent);background:transparent;color:var(--fg);
+  font-family:var(--display);font-size:17px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:12px 16px;border-radius:4px;cursor:pointer}
+.photo-btn.ios-cam{border-color:var(--line)}
+.photo-btn small{font-family:var(--body);font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)}
+.photo-btn:focus-visible{outline:2px solid var(--fg);outline-offset:3px}
+/* режим «Фото с фигурой»: камера на весь экран, фигура поверх */
+.cam{position:fixed;inset:0;z-index:50;background:#000;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+.cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cam.mirror video{transform:scaleX(-1)}
+.cam #camFig{position:absolute;left:0;top:0;max-width:none;transform-origin:50% 50%;pointer-events:none;-webkit-user-drag:none;filter:drop-shadow(0 6px 10px rgba(0,0,0,.35))}
+.cam-tip{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top,0px) + 12px) max(16px,env(safe-area-inset-right,0px)) 12px max(16px,env(safe-area-inset-left,0px));
+  text-align:center;font-size:clamp(12px,3.6vw,16px);line-height:1.35;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);background:linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,0));pointer-events:none;transition:opacity .4s}
+.cam-bar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:space-evenly;gap:clamp(2px,1.5vw,10px);
+  padding:14px max(12px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 18px) max(12px,env(safe-area-inset-left,0px));background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.6))}
+.cam-ctl{flex:none;width:clamp(40px,12.5vw,56px);height:clamp(40px,12.5vw,56px);border-radius:50%;border:0;background:rgba(0,0,0,.35);color:#fff;font:600 clamp(11px,3.3vw,14px)/1 var(--body);display:grid;place-items:center;cursor:pointer;padding:0;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.cam-ctl svg{width:45%;height:45%}
+.cam-ctl[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.cam-ctl:focus-visible,.shutter:focus-visible,.res-btn:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.shutter{flex:none;width:clamp(56px,18vw,80px);height:clamp(56px,18vw,80px);border-radius:50%;border:clamp(3px,1.2vw,5px) solid #fff;background:var(--accent);cursor:pointer;padding:0;box-shadow:0 0 0 2px rgba(0,0,0,.25)}
+.shutter:active{transform:scale(.94)}
+.cam-count{position:absolute;inset:0;display:grid;place-items:center;font:600 clamp(72px,30vmin,140px)/1 var(--display);color:#fff;text-shadow:0 4px 20px rgba(0,0,0,.6);pointer-events:none}
+.cam-flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
+.cam-flash.on{opacity:.85;transition:none}
+.cam-msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;color:#fff;background:#111}
+.cam-msg p{margin:0;max-width:34ch;line-height:1.5}
+.cam-result{position:absolute;inset:0;background:#000;display:flex;flex-direction:column}
+.cam-result img{flex:1;min-height:0;width:100%;object-fit:contain}
+.res-bar{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;padding:14px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 18px) max(16px,env(safe-area-inset-left,0px))}
+.res-btn{border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff;font:600 clamp(14px,4vw,16px)/1 var(--body);padding:13px clamp(12px,4vw,20px);border-radius:4px;cursor:pointer}
+.res-btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.res-note{color:#cfcfcf;font-size:13px;text-align:center;margin:0;padding:0 16px 6px;min-height:1.2em}
+@media (orientation:landscape) and (max-height:500px){
+  .cam-bar{padding-top:6px;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 8px)}
+  .cam-ctl{width:44px;height:44px}
+  .shutter{width:60px;height:60px}
+  .cam-tip{font-size:12px;padding-top:calc(env(safe-area-inset-top,0px) + 6px)}
+  .xr-escape{bottom:calc(env(safe-area-inset-bottom,0px) + 80px)}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <h1>AR-<span>фото</span></h1>
+    <div class="spec" id="spec">В полный рост · дата обновляется каждый день</div>
+  </header>
+
+  <div class="stage">
+    <model-viewer id="mv" alt="Фигура в полный рост с табличкой, на которой сегодняшняя дата"
+      ar ar-modes="quick-look" ar-scale="auto" ar-placement="floor"
+      camera-controls touch-action="pan-y" camera-target="auto auto auto" camera-orbit="-15deg 82deg auto"
+      min-camera-orbit="auto 40deg 1.5m" max-camera-orbit="auto 95deg 6m"
+      shadow-intensity="1" shadow-softness="0.8" exposure="1.05" environment-image="neutral"
+      interaction-prompt="none">
+    </model-viewer>
+    <button class="ar-btn" id="arBtn" type="button">Поставить в комнату</button>
+    <span class="hint">Покрутите пальцем</span>
+  </div>
+
+  <button class="photo-btn ios-cam" id="iosCam" type="button" hidden>Селфи и таймер<small>Режим камеры с кнопками: фронтальная камера, таймер, «Сюда», «180°»</small></button>
+  <button class="photo-btn" id="photoBtn" type="button">Фото с фигурой<small>Камера телефона + фигура рядом. Работает на любом телефоне, без AR</small></button>
+
+  <p class="status" id="status">Проверяю, поддерживает ли устройство AR…</p>
+  <div class="fallback" id="iosHint" hidden>
+    <p class="fb-title">Для AR на iPhone откройте страницу в Safari</p>
+    <p class="fb-text">В этом браузере iPhone показывает фигуру только как объект, без камеры. Скопируйте ссылку, откройте Safari и вставьте её в адресную строку. «Фото с фигурой» работает и здесь.</p>
+    <button class="btn" id="copyLink" type="button">Скопировать ссылку</button>
+    <p class="fb-text" id="copyNote" aria-live="polite"></p>
+  </div>
+  <div class="fallback" id="fallback" hidden>
+    <p class="fb-title">Камера не открылась? Попробуйте по порядку:</p>
+    <div class="fb-list">
+      <button class="btn" id="fbPhoto" type="button">Сделать фото с фигурой (без AR)</button>
+      <button class="btn" id="fbGoogle" type="button">Открыть через приложение Google</button>
+      <button class="btn" id="fbScene" type="button">Открыть в приложении Scene Viewer</button>
+      <a class="btn" id="chromeLink" href="#" hidden>Открыть эту страницу в Chrome</a>
+      <a class="btn ghost" href="https://play.google.com/store/apps/details?id=com.google.ar.core" target="_blank" rel="noopener">Установить «Сервисы Google Play для AR»</a>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step"><h2>Android</h2><p>«Поставить в комнату» → разрешите камеру. Если телефон поддерживает AR, фигура встанет на пол, двумя пальцами можно менять размер и поворот, фото — оранжевой кнопкой или скриншотом. Если нет, включится камера с гироскопом.</p></div>
+    <div class="step"><h2>iPhone</h2><p>В Safari «Поставить в комнату» открывает AR от Apple: вкладка «ДР», белый круг — фото, удержание — видео. Фигура в натуральный рост: отойдите на 2–3 м или уменьшите её двумя пальцами. Селфи и таймер — кнопка «Селфи и таймер».</p></div>
+    <div class="step"><h2>Без AR</h2><p>«Фото с фигурой» включает обычную камеру. Двигайте фигуру пальцем, двумя пальцами меняйте размер. Встаньте рядом и нажмите оранжевую кнопку или включите таймер на 3 секунды.</p></div>
+  </div>
+</div>
+
+<div class="cam xr" id="xr" hidden>
+  <video id="xrVideo" playsinline muted autoplay></video>
+  <canvas class="xr-canvas" id="xrCanvas"></canvas>
+  <div class="cam-tip" id="xrTip"></div>
+  <button class="xr-escape" id="xrEscape" type="button" hidden>Чёрный экран? Включить простой режим</button>
+  <div class="cam-count" id="xrCount" hidden></div>
+  <div class="cam-flash" id="xrFlash"></div>
+  <div class="cam-bar">
+    <button class="cam-ctl" id="xrClose" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <button class="cam-ctl" id="xrHere" type="button" aria-label="Поставить фигуру перед собой">Сюда</button>
+    <button class="shutter" id="xrShot" type="button" aria-label="Сделать снимок"></button>
+    <button class="cam-ctl" id="xrTimer" type="button" aria-pressed="false" aria-label="Таймер 3 секунды">3 с</button>
+    <button class="cam-ctl" id="xrTurn" type="button" aria-label="Повернуть фигуру спиной">180°</button>
+    <button class="cam-ctl" id="xrSwitch" type="button" aria-label="Сменить камеру: задняя или фронтальная"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a8 8 0 0 1 14-3l2 2M20 15a8 8 0 0 1-14 3l-2-2"/><path d="M20 4v4h-4M4 20v-4h4"/></svg></button>
+  </div>
+  <div class="cam-msg" id="xrMsg" hidden><p id="xrMsgText"></p><button class="res-btn primary" id="xrMsgClose" type="button">Закрыть</button></div>
+  <div class="cam-result" id="xrResult" hidden>
+    <img id="xrPhoto" alt="Готовое фото с фигурой">
+    <p class="res-note" id="xrNote"></p>
+    <div class="res-bar">
+      <button class="res-btn" id="xrRetake" type="button">Ещё раз</button>
+      <button class="res-btn" id="xrShare" type="button" hidden>Поделиться</button>
+      <button class="res-btn primary" id="xrSave" type="button">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="cam" id="cam" hidden>
+  <video id="camVideo" playsinline muted autoplay></video>
+  <img id="camFig" alt="" draggable="false">
+  <div class="cam-tip" id="camTip">Двигайте фигуру пальцем. Двумя пальцами — размер и поворот</div>
+  <div class="cam-count" id="camCount" hidden></div>
+  <div class="cam-flash" id="camFlash"></div>
+  <div class="cam-bar">
+    <button class="cam-ctl" id="camClose" type="button" aria-label="Закрыть камеру"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <button class="cam-ctl" id="camSide" type="button" aria-pressed="false" aria-label="Показать фигуру со спины">Спина</button>
+    <button class="shutter" id="camShot" type="button" aria-label="Сделать снимок"></button>
+    <button class="cam-ctl" id="camTimer" type="button" aria-pressed="false" aria-label="Таймер 3 секунды">3 с</button>
+    <button class="cam-ctl" id="camSwitch" type="button" aria-label="Сменить камеру"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a8 8 0 0 1 14-3l2 2M20 15a8 8 0 0 1-14 3l-2-2"/><path d="M20 4v4h-4M4 20v-4h4"/></svg></button>
+  </div>
+  <div class="cam-msg" id="camMsg" hidden><p id="camMsgText"></p><button class="res-btn primary" id="camMsgClose" type="button">Закрыть</button></div>
+  <div class="cam-result" id="camResult" hidden>
+    <img id="camPhoto" alt="Готовое фото с фигурой">
+    <p class="res-note" id="resNote"></p>
+    <div class="res-bar">
+      <button class="res-btn" id="resRetake" type="button">Ещё раз</button>
+      <button class="res-btn" id="resShare" type="button" hidden>Поделиться</button>
+      <button class="res-btn primary" id="resSave" type="button">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var mv=document.getElementById('mv'), st=document.getElementById('status');
+  var fb=document.getElementById('fallback'), arBtn=document.getElementById('arBtn');
+  var ua=navigator.userAgent, isAndroid=/Android/i.test(ua);
+  var isChrome=/Chrome\//.test(ua) && !/YaBrowser|SamsungBrowser|OPR\/|EdgA|MiuiBrowser|HuaweiBrowser|HeyTapBrowser|; wv\)/.test(ua);
+  var isIOS=/iPhone|iPad|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  var iosOther=isIOS && /CriOS|FxiOS|EdgiOS|YaBrowser|OPiOS|GSA\/|Instagram|FBAN|FBAV|Line\/|VKClient|Telegram|MicroMessenger/i.test(ua);
+  var isMobile=isAndroid || isIOS || /Mobile/i.test(ua);
+  function set(html){st.innerHTML=html;}
+  /* дата по Екатеринбургу: модель пересобирается каждую ночь, а дата в адресе не даёт телефону взять вчерашнюю из кэша */
+  var d=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Yekaterinburg',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()).replace(/-/g,'');
+  var model=new URL('standee.glb?d='+d, location.href).href;
+  mv.src=model;
+  var page=location.href.split('#')[0];
+
+  /* Умный помощник запуска камеры с каскадом разрешений и защитой от занятости Camera HAL на Android */
+  async function requestCameraStream(facing) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      var err = new Error('MediaDevices API not supported');
+      err.name = 'NotSupportedError';
+      throw err;
+    }
+    var profiles = [
+      { audio: false, video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      { audio: false, video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { audio: false, video: { facingMode: { ideal: facing } } },
+      { audio: false, video: true }
+    ];
+    var lastErr = null;
+    for (var i = 0; i < profiles.length; i++) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(profiles[i]);
+      } catch (e) {
+        lastErr = e;
+        if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'PermissionDeniedError')) {
+          throw e;
+        }
+        /* На Android при быстром переключении камер Camera2 HAL может вернуть NotReadableError — даём 180 мс на освобождение */
+        if (e && (e.name === 'NotReadableError' || e.name === 'AbortError' || e.name === 'TrackStartError')) {
+          await new Promise(function(r){ setTimeout(r, 180); });
+          try {
+            return await navigator.mediaDevices.getUserMedia(profiles[i]);
+          } catch (e2) {
+            lastErr = e2;
+          }
+        }
+      }
+    }
+    throw lastErr || new Error('Camera failed');
+  }
+
+  window.__arInfo={
+    isIOS:isIOS, iosOther:iosOther, isAndroid:isAndroid, isMobile:isMobile,
+    model:model, dateTag:d, setStatus:set, requestCameraStream:requestCameraStream
+  };
+
+  function sv(pkg, mode){
+    return 'intent://arvr.google.com/scene-viewer/1.0?file='+encodeURIComponent(model)+
+      '&mode='+mode+'&resizable=true&title='+encodeURIComponent('AR-фото')+
+      '#Intent;scheme=https;package='+pkg+';action=android.intent.action.VIEW;'+
+      'S.browser_fallback_url='+encodeURIComponent(page+'#noar')+';end;';
+  }
+  var timer=null;
+  function showFallback(){ fb.hidden=false; fb.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+  function launch(url){
+    clearTimeout(timer); location.href=url;
+    timer=setTimeout(function(){ if(document.visibilityState==='visible') showFallback(); },2500);
+  }
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='hidden') clearTimeout(timer); });
+
+  /* «Поставить в комнату»:
+     iPhone + Safari -> системный AR Quick Look;
+     Android и другие браузеры -> свой AR: WebXR с проверкой трекинга, при отказе — камера + гироскоп */
+  arBtn.addEventListener('click',function(){
+    if(isIOS && !iosOther && mv.canActivateAR){ mv.activateAR(); return; }
+    if(window.arStart){ window.arStart(); }
+    else { set('AR ещё загружается, нажмите кнопку ещё раз через пару секунд.'); }
+  });
+
+  if(isAndroid){
+    document.getElementById('fbScene').addEventListener('click',function(){ launch(sv('com.google.ar.core','ar_only')); });
+    document.getElementById('fbGoogle').addEventListener('click',function(){ launch(sv('com.google.android.googlequicksearchbox','ar_preferred')); });
+    if(!isChrome){
+      var cl=document.getElementById('chromeLink');
+      cl.href='intent://'+page.replace(/^https?:\/\//,'')+'#Intent;scheme=https;package=com.android.chrome;end;';
+      cl.hidden=false;
+    }
+  } else {
+    document.getElementById('fbScene').hidden=true; document.getElementById('fbGoogle').hidden=true;
+  }
+  if(isIOS && !iosOther){
+    var ic=document.getElementById('iosCam'); ic.hidden=false;
+    ic.addEventListener('click',function(){ if(window.arStart) window.arStart(); else set('Камера ещё загружается, нажмите ещё раз через пару секунд.'); });
+  }
+  if(iosOther){
+    document.getElementById('iosHint').hidden=false;
+    document.getElementById('copyLink').addEventListener('click',function(){
+      var note=document.getElementById('copyNote');
+      function fallbackCopy(){
+        try {
+          var ta=document.createElement('textarea');
+          ta.value=page; ta.style.cssText='position:fixed;opacity:0';
+          document.body.appendChild(ta); ta.select();
+          var ok=document.execCommand('copy'); ta.remove();
+          note.textContent=ok?'Ссылка скопирована. Откройте Safari и вставьте её.':'Скопируйте вручную: '+page;
+        } catch(_) { note.textContent='Скопируйте вручную: '+page; }
+      }
+      try{
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(page).then(
+            function(){ note.textContent='Ссылка скопирована. Откройте Safari и вставьте её.'; },
+            fallbackCopy
+          );
+        } else fallbackCopy();
+      }catch(e){ fallbackCopy(); }
+    });
+  }
+  if(location.hash==='#noar'){ set('Приложение Google для AR не открылось. Нажмите «Поставить в комнату» или «Фото с фигурой».'); showFallback(); }
+  mv.addEventListener('load',function(){
+    if(location.hash==='#noar') return;
+    if(isIOS && !iosOther){ set(mv.canActivateAR ? '<b>Готово.</b> «Поставить в комнату» — AR от Apple: вкладка «ДР», белый круг — фото, удержание — видео, двумя пальцами — размер. Селфи и таймер — кнопка ниже.' : 'Нажмите «Поставить в комнату», откроется камера.'); }
+    else if(iosOther){ set('В этом браузере фигура откроется в режиме камеры. Для полноценного AR откройте страницу в Safari.'); }
+    else if(isMobile){ set('<b>Готово.</b> Нажмите «Поставить в комнату» и разрешите доступ к камере.'); }
+    else { set('Откройте страницу на телефоне для AR или нажмите «Фото с фигурой» для съёмки с веб-камерой.'); }
+  });
+  mv.addEventListener('error',function(){
+    if(!isMobile) set('Для просмотра в AR откройте страницу на телефоне или используйте «Фото с фигурой».');
+  });
+})();
+</script>
+
+<script>
+/* «Фото с фигурой»: обычная камера телефона + фигура с сегодняшней датой поверх. AR и ARCore не нужны. */
+(function(){
+  var $=function(id){return document.getElementById(id);};
+  var cam=$('cam'), video=$('camVideo'), fig=$('camFig'), tip=$('camTip');
+  var info=window.__arInfo || {};
+  var d=info.dateTag || '1';
+  var SRC={front:'figure.png?d='+d, back:'figure-back.png?d='+d};
+  var FALLBACK_SRC={front:'assets/front.png?d='+d, back:'assets/back.png?d='+d};
+  var side='front', facing='environment', stream=null, timerOn=false, busy=false, photoBlob=null, photoUrl=null;
+  var st={cx:0,cy:0,h:0,a:0};             /* центр фигуры, высота в px экрана, поворот в радианах */
+  var aspect=0.45, countTimer=null;
+
+  function W(){return cam.clientWidth || window.innerWidth;}
+  function H(){return cam.clientHeight || window.innerHeight;}
+  function render(){
+    var w=st.h*aspect;
+    fig.style.width=w+'px'; fig.style.height=st.h+'px';
+    fig.style.transform='translate('+(st.cx-w/2)+'px,'+(st.cy-st.h/2)+'px) rotate('+st.a+'rad)';
+  }
+  function placeDefault(){
+    st.h=H()*0.78; st.a=0;
+    st.cx=W()*0.66; st.cy=H()-st.h/2-110;
+    render();
+  }
+  /* Запасная генерация силуэта на случай отсутствия файлов при локальном предпросмотре */
+  function makeFallbackDataUrl(isBack) {
+    var c=document.createElement('canvas'); c.width=480; c.height=1000;
+    var g=c.getContext('2d');
+    g.fillStyle=isBack?'#2b2e36':'#353942';
+    g.beginPath(); g.arc(240,120,65,0,Math.PI*2); g.fill();
+    g.fillRect(150,190,180,460);
+    g.fillRect(160,650,70,320); g.fillRect(250,650,70,320);
+    if(!isBack && window.__makeDateCanvas){
+      var dc=window.__makeDateCanvas();
+      g.drawImage(dc, 60, 220, 220, 304);
+    }
+    return c.toDataURL('image/png');
+  }
+  function setSide(s, keep){
+    side=s; $('camSide').setAttribute('aria-pressed', s==='back'?'true':'false');
+    var triedAlt=false;
+    fig.onload=function(){
+      if(fig.naturalWidth && fig.naturalHeight) aspect=fig.naturalWidth/fig.naturalHeight;
+      if(keep) render(); else placeDefault();
+    };
+    fig.onerror=function(){
+      if(!triedAlt){ triedAlt=true; fig.src=FALLBACK_SRC[s]; }
+      else { fig.onerror=null; fig.src=makeFallbackDataUrl(s==='back'); }
+    };
+    fig.src=SRC[s];
+  }
+
+  function showMsg(text){ $('camMsgText').textContent=text; $('camMsg').hidden=false; }
+  function stopStream(){
+    if(countTimer){ clearInterval(countTimer); countTimer=null; $('camCount').hidden=true; busy=false; }
+    if(stream){ stream.getTracks().forEach(function(t){ try{t.stop();}catch(_){} }); stream=null; }
+    try{ video.pause(); video.srcObject=null; }catch(_){}
+  }
+  function startCamera(){
+    stopStream();
+    cam.classList.toggle('mirror', facing==='user');
+    if(!info.requestCameraStream){
+      showMsg('Этот браузер не даёт доступ к камере. Откройте страницу в Chrome (Android) или Safari (iPhone).'); return;
+    }
+    info.requestCameraStream(facing)
+      .then(function(s){
+        if(cam.hidden){ s.getTracks().forEach(function(t){t.stop();}); return; }
+        stream=s; video.srcObject=s; return video.play();
+      })
+      .catch(function(e){
+        if(e && (e.name==='NotAllowedError'||e.name==='SecurityError'||e.name==='PermissionDeniedError'))
+          showMsg('Нет доступа к камере. Нажмите значок слева от адреса сайта → «Разрешения» → «Камера» → «Разрешить», затем откройте режим снова.');
+        else if(e && e.name==='NotFoundError') showMsg('Камера на устройстве не найдена.');
+        else showMsg('Не удалось включить камеру. Закройте другие приложения, которые её используют, и попробуйте снова.');
+      });
+  }
+
+  function open(){
+    if(window.__closeXR) window.__closeXR();
+    cam.hidden=false; $('camMsg').hidden=true; $('camResult').hidden=true;
+    tip.style.opacity=1; setTimeout(function(){ tip.style.opacity=0; },5000);
+    try{ history.pushState({cam:1},''); }catch(e){}
+    setSide('front', false);
+    startCamera();
+  }
+  function close(fromPop){
+    stopStream(); cam.hidden=true;
+    if(photoUrl){ URL.revokeObjectURL(photoUrl); photoUrl=null; }
+    if(!fromPop){ try{ if(history.state && history.state.cam) history.back(); }catch(e){} }
+  }
+  window.__closeCam = function(){ if(!cam.hidden) close(true); };
+  window.addEventListener('popstate',function(){ if(!cam.hidden) close(true); });
+  window.addEventListener('resize',function(){ if(!cam.hidden && fig.naturalWidth){ st.cx=Math.min(Math.max(st.cx,0),W()); st.cy=Math.min(Math.max(st.cy,0),H()); render(); } });
+
+  /* жесты: один палец — двигать, два — масштаб и поворот */
+  var pts={};
+  function pair(){ var k=Object.keys(pts); if(k.length<2) return null; var a=pts[k[0]], b=pts[k[1]];
+    return {d:Math.hypot(b.x-a.x,b.y-a.y), ang:Math.atan2(b.y-a.y,b.x-a.x), mx:(a.x+b.x)/2, my:(a.y+b.y)/2}; }
+  cam.addEventListener('pointerdown',function(e){
+    if(e.target.closest('button') || !$('camResult').hidden || !$('camMsg').hidden) return;
+    pts[e.pointerId]={x:e.clientX,y:e.clientY}; try{ cam.setPointerCapture(e.pointerId); }catch(_){}
+    tip.style.opacity=0;
+  });
+  cam.addEventListener('pointermove',function(e){
+    if(!pts[e.pointerId]) return;
+    var before=pair(), prev=pts[e.pointerId];
+    var dx=e.clientX-prev.x, dy=e.clientY-prev.y;
+    pts[e.pointerId]={x:e.clientX,y:e.clientY};
+    var after=pair();
+    if(before && after){
+      var k=after.d/Math.max(before.d,1);
+      st.h=Math.min(Math.max(st.h*k, H()*0.15), H()*2.5);
+      st.a+=after.ang-before.ang;
+      st.cx+=after.mx-before.mx; st.cy+=after.my-before.my;
+    } else if(Object.keys(pts).length===1){ st.cx+=dx; st.cy+=dy; }
+    render();
+  });
+  function up(e){ delete pts[e.pointerId]; }
+  cam.addEventListener('pointerup',up); cam.addEventListener('pointercancel',up);
+  cam.addEventListener('wheel',function(e){ e.preventDefault(); st.h=Math.min(Math.max(st.h*(e.deltaY<0?1.06:0.94),H()*0.15),H()*2.5); render(); },{passive:false});
+
+  /* снимок: кадр камеры (как на экране) + фигура в том же месте */
+  function shoot(){
+    var vw=video.videoWidth, vh=video.videoHeight;
+    if(!vw || !vh){ return; }
+    var s=Math.max(W()/vw, H()/vh), sw=W()/s, sh=H()/s, sx=(vw-sw)/2, sy=(vh-sh)/2;
+    var c=document.createElement('canvas'); c.width=Math.round(sw); c.height=Math.round(sh);
+    var g=c.getContext('2d');
+    g.imageSmoothingEnabled=true; g.imageSmoothingQuality='high';
+    if(facing==='user'){ g.save(); g.translate(c.width,0); g.scale(-1,1); }
+    g.drawImage(video, sx,sy,sw,sh, 0,0,c.width,c.height);
+    if(facing==='user') g.restore();
+    var k=c.width/W(), w=st.h*aspect;
+    g.save(); g.translate(st.cx*k, st.cy*k); g.rotate(st.a);
+    g.shadowColor='rgba(0,0,0,.35)'; g.shadowBlur=10*k; g.shadowOffsetY=6*k;
+    g.drawImage(fig, -w*k/2, -st.h*k/2, w*k, st.h*k); g.restore();
+    var fl=$('camFlash'); fl.classList.add('on'); setTimeout(function(){ fl.classList.remove('on'); },60);
+    c.toBlob(function(b){
+      if(!b) return;
+      photoBlob=b; if(photoUrl) URL.revokeObjectURL(photoUrl); photoUrl=URL.createObjectURL(b);
+      $('camPhoto').src=photoUrl; $('resNote').textContent='';
+      var file=new File([b], fileName(), {type:'image/jpeg'});
+      $('resShare').hidden=!(navigator.canShare && navigator.canShare({files:[file]}));
+      $('camResult').hidden=false;
+    }, 'image/jpeg', 0.92);
+  }
+  function fileName(){ var n=new Date(); function p(x){return (x<10?'0':'')+x;}
+    return 'ar-foto-'+n.getFullYear()+p(n.getMonth()+1)+p(n.getDate())+'-'+p(n.getHours())+p(n.getMinutes())+p(n.getSeconds())+'.jpg'; }
+  function countdown(n, done){
+    var el=$('camCount'); el.hidden=false; el.textContent=n;
+    countTimer=setInterval(function(){ n--; if(n<=0){ clearInterval(countTimer); countTimer=null; el.hidden=true; done(); } else el.textContent=n; },1000);
+  }
+
+  $('photoBtn').addEventListener('click',open);
+  $('fbPhoto').addEventListener('click',open);
+  $('camClose').addEventListener('click',function(){ close(false); });
+  $('camMsgClose').addEventListener('click',function(){ close(false); });
+  $('camSwitch').addEventListener('click',function(){ facing=facing==='environment'?'user':'environment'; startCamera(); });
+  $('camSide').addEventListener('click',function(){ setSide(side==='front'?'back':'front', true); });
+  $('camTimer').addEventListener('click',function(){ timerOn=!timerOn; this.setAttribute('aria-pressed', timerOn?'true':'false'); });
+  $('camShot').addEventListener('click',function(){
+    if(busy) return; busy=true;
+    var go=function(){ shoot(); busy=false; };
+    if(timerOn) countdown(3, go); else go();
+  });
+  $('resRetake').addEventListener('click',function(){ $('camResult').hidden=true; });
+  $('resSave').addEventListener('click',function(){
+    if(!photoUrl) return;
+    var a=document.createElement('a'); a.href=photoUrl; a.download=fileName();
+    document.body.appendChild(a); a.click(); a.remove();
+    $('resNote').textContent='Фото скачивается в папку «Загрузки». В галерее оно появится через несколько секунд.';
+  });
+  $('resShare').addEventListener('click',function(){
+    if(!photoBlob) return;
+    var file=new File([photoBlob], fileName(), {type:'image/jpeg'});
+    navigator.share({files:[file], title:'AR-фото'}).catch(function(){});
+  });
+})();
+</script>
+
+<script type="module">
+/* «Поставить в комнату» на Android и не-Safari.
+   1) Если телефон умеет WebXR — свой AR-сеанс (исправлена потеря жеста пользователя, защита от краша Chrome 147+ на XRProjectionLayer,
+      корректная работа с непрозрачной текстурой камеры и рендер снимка в высоком разрешении).
+   2) Камера + гироскоп: видео с камеры, поверх 3D-фигура; при повороте телефона фигура остаётся на месте. ARCore не нужен. */
+const $ = (id) => document.getElementById(id);
+const info = window.__arInfo || {};
+const root = $('xr'), video = $('xrVideo'), tipEl = $('xrTip'), escBtn = $('xrEscape');
+const MODEL = info.model || 'standee.glb';
+const CAM_H = 1.5;                              // высота телефона над полом в режиме гироскопа, м
+const DIST = { environment: 3.0, user: 2.6 };   // на каком расстоянии ставить фигуру, м (для селфи — ближе)
+const LONG_FOV = { environment: 68, user: 76 }; // угол обзора камеры по длинной стороне, градусы
+let facing = 'environment';                      // 'environment' — задняя камера, 'user' — фронтальная
+let figScale = 1;
+
+/* Защита от краша вкладки Chrome 147–148 на Android при использовании WebXR camera-access совместно с XRProjectionLayer (Three.js #33404) */
+if (info.isAndroid) {
+  try {
+    if (typeof XRWebGLBinding !== 'undefined' && 'createProjectionLayer' in XRWebGLBinding.prototype) {
+      delete XRWebGLBinding.prototype.createProjectionLayer;
+    }
+    if (typeof XRRenderState !== 'undefined' && 'layers' in XRRenderState.prototype) {
+      delete XRRenderState.prototype.layers;
+    }
+    if (typeof XRSession !== 'undefined' && XRSession.prototype.updateRenderState) {
+      const origUpdateRenderState = XRSession.prototype.updateRenderState;
+      let savedBaseLayer;
+      XRSession.prototype.updateRenderState = function ( state ) {
+        if (state && state.baseLayer !== undefined) savedBaseLayer = state.baseLayer;
+        const nextState = (state && state.baseLayer === undefined && savedBaseLayer)
+          ? Object.assign({ baseLayer: savedBaseLayer }, state)
+          : state;
+        return origUpdateRenderState.call(this, nextState);
+      };
+    }
+  } catch (_) {}
+}
+
+let THREE = null, GLTFLoader = null, figure = null, loading = null;
+let renderer = null, scene = null, camera = null, holder = null, reticle = null, canvas = $('xrCanvas');
+let mode = null, session = null, stream = null, raf = 0, fallbackReason = null;
+let userYaw = 0, timerOn = false, busy = false, photoBlob = null, photoUrl = null, countTimer = 0;
+let tipTimer = 0, escTimer = 0, ending = false, lastPinchTime = 0;
+
+/* Предварительная проверка поддержки WebXR сразу при открытии страницы, чтобы не тратить время при клике */
+const xrSupportPromise = (navigator.xr && !info.isIOS && typeof navigator.xr.isSessionSupported === 'function')
+  ? navigator.xr.isSessionSupported('immersive-ar').catch(() => false)
+  : Promise.resolve(false);
+let xrSupportedCached = null;
+xrSupportPromise.then((ok) => { xrSupportedCached = ok; });
+
+function endSession(reason) {   // завершить AR-сеанс один раз
+  if (!session || ending) return;
+  ending = true; fallbackReason = reason;
+  session.end().catch(() => {});
+}
+
+function tip(t, ms) {
+  clearTimeout(tipTimer);
+  tipEl.textContent = t || ''; tipEl.style.opacity = t ? 1 : 0;
+  if (t && ms) tipTimer = setTimeout(() => { tipEl.style.opacity = 0; }, ms);
+}
+function showMsg(t) { $('xrMsgText').textContent = t; $('xrMsg').hidden = false; }
+
+/* ---------- генерация таблички с сегодняшней датой ---------- */
+function dateParts() {
+  const p = {};
+  new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Yekaterinburg', day: 'numeric', month: 'long', weekday: 'long', year: 'numeric' })
+    .formatToParts(new Date()).forEach((x) => { p[x.type] = x.value; });
+  return p;
+}
+function dateCanvasSync() {
+  const W = 600, H = 830, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d'), d = dateParts(), pad = 46, mw = W - 2 * pad;
+  const BOLD = '"Oswald","Arial Narrow",Arial,sans-serif', REG = '"Manrope",Arial,sans-serif';
+  const fit = (text, weight, fam, size) => { do { g.font = `${weight} ${size}px ${fam}`; size -= 2; } while (g.measureText(text).width > mw && size > 10); return size + 2; };
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  g.font = `600 40px ${BOLD}`; g.fillStyle = '#78787c';
+  const top = 'СЕГОДНЯ', sp = 10; let tw = 0; for (const ch of top) tw += g.measureText(ch).width; tw += sp * (top.length - 1);
+  let x = (W - tw) / 2; for (const ch of top) { g.fillText(ch, x, 92); x += g.measureText(ch).width + sp; }
+  g.fillStyle = '#f26b14'; g.fillRect(W / 2 - 60, 112, 120, 8);
+  const day = d.day || '';
+  const ds = fit(day, 600, BOLD, 380); g.font = `600 ${ds}px ${BOLD}`;
+  const mDay = g.measureText(day), asc = mDay.actualBoundingBoxAscent || ds * 0.72, dsc = mDay.actualBoundingBoxDescent || 0;
+  g.fillStyle = '#18181a'; g.fillText(day, (W - mDay.width) / 2, 150 + asc);
+  let y = 150 + asc + dsc + 34;
+  const month = (d.month || '').toUpperCase(), ms = fit(month, 600, BOLD, 96);
+  g.font = `600 ${ms}px ${BOLD}`; g.fillStyle = '#f26b14';
+  g.fillText(month, (W - g.measureText(month).width) / 2, y + ms * 0.8); y += ms + 26;
+  g.fillStyle = '#cdcdd0'; g.fillRect(pad + 40, y, W - 2 * pad - 80, 4); y += 30;
+  const wd = d.weekday || '', ws = fit(wd, 400, REG, 64);
+  g.font = `400 ${ws}px ${REG}`; g.fillStyle = '#18181a'; g.fillText(wd, (W - g.measureText(wd).width) / 2, y + ws * 0.8); y += ws + 20;
+  g.font = `400 40px ${REG}`; g.fillStyle = '#78787c'; g.fillText(d.year || '', (W - g.measureText(d.year || '').width) / 2, y + 32);
+  return c;
+}
+async function dateCanvas() {   // табличка как в статичной фигуре: СЕГОДНЯ / число / месяц / день недели / год
+  try { await Promise.all([document.fonts.load('600 200px Oswald'), document.fonts.load('400 60px Manrope')]); } catch (e) {}
+  return dateCanvasSync();
+}
+window.__makeDateCanvas = dateCanvasSync;
+
+/* Запасная 3D-фигура, если standee.glb недоступен (например, при открытии одного HTML без сервера) */
+async function createProceduralStandee() {
+  const grp = new THREE.Group();
+  const cardTex = new THREE.CanvasTexture(await dateCanvas());
+  cardTex.colorSpace = THREE.SRGBColorSpace;
+  const cardMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.42, 0.58),
+    new THREE.MeshBasicMaterial({ map: cardTex, side: THREE.DoubleSide })
+  );
+  cardMesh.position.set(0, 1.15, 0.01);
+  grp.add(cardMesh);
+  return grp;
+}
+
+/* ---------- загрузка three.js и модели (заранее, чтобы нажатие сработало мгновенно) ---------- */
+function loadAll() {
+  if (loading) return loading;
+  loading = (async () => {
+    THREE = await import('three');
+    ({ GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js'));
+    try {
+      const g = await new GLTFLoader().loadAsync(MODEL);
+      figure = g.scene;
+      figure.traverse((o) => {
+        if (o.isMesh) {   // фото без освещения: цвета как на снимке, при любом свете в комнате
+          const m = o.material;
+          if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
+          o.material = new THREE.MeshBasicMaterial({ map: m.map, alphaTest: 0.5, side: THREE.FrontSide });
+        }
+      });
+    } catch (err) {
+      figure = await createProceduralStandee();
+    }
+    await setupLive();
+  })();
+  loading.catch(() => { loading = null; });
+  return loading;
+}
+/* Предзагружаем сразу при открытии страницы */
+loadAll().catch(() => {});
+
+/* ---------- «живое фото»: видео спереди (слева цвет, справа прозрачность) + дата на табличке ---------- */
+let live = null;
+const liveJsonUrl = new URL('live.json', location.href).href;
+const liveMeta = fetch(liveJsonUrl, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+
+async function setupLive() {
+  const meta = await liveMeta;
+  if (!meta || !figure) return;
+  const v = document.createElement('video');
+  v.src = 'live.mp4' + (meta.v ? '?v=' + meta.v : '');
+  v.muted = true; v.loop = true; v.playsInline = true; v.crossOrigin = 'anonymous';
+  v.setAttribute('playsinline', ''); v.setAttribute('muted', ''); v.preload = 'auto';
+  /* видео в DOM (невидимое): Chrome на Android не останавливает декодирование «отсоединённого» видео в режиме AR */
+  v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+  document.body.appendChild(v);
+
+  /* Аппаратная сборка кадра без блокирующего CPU getImageData:
+     левая половина кадра (цвет) рисуется в colorCanvas, правая (маска прозрачности) — в alphaCanvas */
+  const W = meta.w, H = meta.h;
+  const colorCanvas = document.createElement('canvas'); colorCanvas.width = W; colorCanvas.height = H;
+  const colorCtx = colorCanvas.getContext('2d');
+  const alphaCanvas = document.createElement('canvas'); alphaCanvas.width = W; alphaCanvas.height = H;
+  const alphaCtx = alphaCanvas.getContext('2d');
+
+  const tex = new THREE.CanvasTexture(colorCanvas); tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+  const aTex = new THREE.CanvasTexture(alphaCanvas);
+  aTex.minFilter = THREE.LinearFilter; aTex.magFilter = THREE.LinearFilter; aTex.generateMipmaps = false;
+
+  const compose = () => {
+    colorCtx.drawImage(v, 0, 0, W, H, 0, 0, W, H);
+    alphaCtx.drawImage(v, W, 0, W, H, 0, 0, W, H);
+    tex.needsUpdate = true;
+    aTex.needsUpdate = true;
+  };
+  const mat = new THREE.MeshBasicMaterial({ map: tex, alphaMap: aTex, alphaTest: 0.5, side: THREE.FrontSide });
+  const S = meta.heightM / (meta.bottom - meta.top);   // метров на пиксель
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(meta.w * S, meta.h * S), mat);
+  plane.position.set((meta.w / 2 - meta.feetX) * S, (meta.bottom - meta.h / 2) * S, 0.0045);
+  plane.renderOrder = 1;
+  // табличка с датой: четыре угла двигаются вместе с табличкой на видео
+  const dTex = new THREE.CanvasTexture(await dateCanvas()); dTex.colorSpace = THREE.SRGBColorSpace;
+  const dGeo = new THREE.BufferGeometry();
+  dGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
+  dGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]), 2));
+  dGeo.setIndex([0, 3, 1, 1, 3, 2]);
+  const dMesh = new THREE.Mesh(dGeo, new THREE.MeshBasicMaterial({ map: dTex, color: 0xeeeeee }));
+  dMesh.renderOrder = 2; dMesh.frustumCulled = false;
+  const front = figure.getObjectByName('front'); if (front) front.visible = false;
+  figure.add(plane); figure.add(dMesh);
+  live = { meta, video: v, tex, aTex, compose, lastT: -1, S, dGeo, last: -1 };
+  updateLive(true);
+}
+function updateLive(force) {   // загрузить текущий кадр видео и поставить дату на табличку
+  if (!live) return;
+  if (live.video.readyState >= 2 && live.video.currentTime !== live.lastT) {
+    live.lastT = live.video.currentTime;
+    try { live.compose(); } catch (e) {}
+  }
+  if (live.video.paused && mode) live.video.play().catch(() => {});
+  const m = live.meta, n = m.frames;
+  const f = Math.min(n - 1, Math.floor((live.video.currentTime || 0) * m.fps) % n);
+  if (f === live.last && !force) return;
+  live.last = f;
+  const q = m.sign[f], S = live.S, pos = live.dGeo.attributes.position;
+  for (let i = 0; i < 4; i++) pos.setXYZ(i, (q[i][0] - m.feetX) * S, (m.bottom - q[i][1]) * S, 0.0065);
+  pos.needsUpdate = true; live.dGeo.computeBoundingSphere();
+}
+function playLive() { if (live) live.video.play().catch(() => {}); }
+
+/* ---------- сцена ---------- */
+function freshCanvas() {   // новый canvas на каждый запуск: у WebXR и у режима камеры разные настройки WebGL
+  const c = document.createElement('canvas'); c.className = 'xr-canvas'; c.id = 'xrCanvas';
+  canvas.replaceWith(c); canvas = c;
+}
+function shadowMesh() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(0,0,0,0.5)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.5),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.position.y = 0.003; return m;
+}
+function setupScene(xr) {
+  freshCanvas();
+  const W = root.clientWidth || window.innerWidth, H = root.clientHeight || window.innerHeight;
+  renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: !xr, powerPreference: 'high-performance' });
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(W, H, false);
+  renderer.setClearColor(0x000000, 0);
+  renderer.xr.enabled = xr;
+  if (xr) canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); endSession('no-tracking'); });
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(60, W / H, 0.05, 60);
+  holder = new THREE.Group(); holder.add(figure); holder.add(shadowMesh()); holder.visible = false;
+  scene.add(holder);
+  reticle = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.16, 40).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xf26b14 }));
+  reticle.visible = false; scene.add(reticle);
+  userYaw = 0; figScale = 1; applyScale();
+}
+function disposeScene() {
+  if (renderer) { renderer.setAnimationLoop(null); renderer.dispose(); }
+  if (holder && figure) holder.remove(figure);
+  if (warmRT) { warmRT.dispose(); warmRT = null; }
+  blit = null; binding = null;
+  renderer = scene = camera = holder = reticle = null;
+}
+function applyScale() {
+  if (holder) holder.scale.set(facing === 'user' ? -figScale : figScale, figScale, figScale);
+}
+function faceFrom(cx, cz) {   // повернуть фигуру лицом к зрителю
+  if (!holder) return;
+  holder.rotation.y = Math.atan2(cx - holder.position.x, cz - holder.position.z) + userYaw;
+}
+
+/* ---------- режим 1: WebXR ---------- */
+let camPosXR = null;
+async function requestXRSession() {
+  return navigator.xr.requestSession('immersive-ar', {
+    optionalFeatures: ['hit-test', 'local-floor', 'dom-overlay', 'camera-access'],
+    domOverlay: { root }
+  });
+}
+
+async function startXR(preRequestedSession) {
+  mode = 'xr'; fallbackReason = null; ending = false;
+  root.classList.add('webxr');
+  session = preRequestedSession || await requestXRSession();
+  await loadAll();
+  playLive();
+  setupScene(true);
+  let refType = 'local-floor';
+  try { await session.requestReferenceSpace('local-floor'); } catch (e) { refType = 'local'; }
+  renderer.xr.setReferenceSpaceType(refType);
+  await renderer.xr.setSession(session);
+  let hitSource = null;
+  try {
+    const vs = await session.requestReferenceSpace('viewer');
+    if (session.requestHitTestSource) hitSource = await session.requestHitTestSource({ space: vs });
+  } catch (e) {}
+
+  const V3 = THREE.Vector3, Q = THREE.Quaternion;
+  const t0 = performance.now(); let firstPose = 0, placed = false, lastHit = null;
+  camPosXR = new V3();
+  const place = (v) => {
+    holder.position.copy(v); holder.visible = true; placed = true;
+    faceFrom(camPosXR.x, camPosXR.z); warmLeft = 2;
+  };
+  const placeAhead = (pose) => {
+    const o = pose.transform.orientation, fwd = new V3(0, 0, -1).applyQuaternion(new Q(o.x, o.y, o.z, o.w));
+    fwd.y = 0; if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); fwd.normalize();
+    const floorY = refType === 'local-floor' ? 0 : camPosXR.y - 1.4;
+    place(new V3(camPosXR.x + fwd.x * 2.2, floorY, camPosXR.z + fwd.z * 2.2));
+  };
+  let lastPose = null, warmLeft = 0, warmNext = 0;
+  camAccess = null; xrShotPending = false; binding = null; blit = null; root.classList.remove('xr-shot');
+
+  /* Не переставлять фигуру, если пользователь только что делал жест двумя пальцами (масштаб/поворот) */
+  session.addEventListener('select', () => {
+    if (Object.keys(pts).length > 1 || performance.now() - lastPinchTime < 350) return;
+    if (lastHit) place(lastHit);
+  });
+  session.addEventListener('end', onXREnd);
+  $('xrHere').onclick = () => { if (lastHit) place(lastHit); else if (lastPose) placeAhead(lastPose); };
+
+  tip('Запускаю AR…');
+  escBtn.hidden = true; clearTimeout(escTimer);
+  escTimer = setTimeout(() => { if (mode === 'xr') escBtn.hidden = false; }, 3000);
+
+  renderer.setAnimationLoop((t, frame) => {
+    if (!frame || !renderer) return;
+    const ref = renderer.xr.getReferenceSpace(), pose = ref ? frame.getViewerPose(ref) : null, now = performance.now();
+    if (!pose) {
+      if (!firstPose && now - t0 > 7000) endSession('no-tracking');
+      updateLive(); renderer.render(scene, camera); return;
+    }
+    lastPose = pose;
+    if (camAccess === null) {
+      const v = pose.views[0];
+      camAccess = !!(v && v.camera && typeof XRWebGLBinding !== 'undefined');
+      root.classList.toggle('xr-shot', camAccess);
+      /* Первое обращение к v.camera в Chrome может изменить активную текстуру в WebGL — сразу сбрасываем кэш Three.js */
+      if (camAccess) {
+        try {
+          const gl = renderer.getContext();
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          renderer.resetState();
+        } catch (_) {}
+      }
+    }
+    if (!firstPose) { firstPose = now; xrWorked = true; tip('Наведите камеру на пол в 1–3 метрах от себя'); }
+    const p = pose.transform.position; camPosXR.set(p.x, p.y, p.z);
+    lastHit = null;
+    if (hitSource) {
+      try {
+        const res = frame.getHitTestResults(hitSource);
+        if (res.length) {
+          const hp = res[0].getPose(ref);
+          if (hp) { const q = hp.transform.position; lastHit = new V3(q.x, q.y, q.z); }
+        }
+      } catch (_) {}
+    }
+    reticle.visible = !!lastHit; if (lastHit) reticle.position.copy(lastHit);
+    if (!placed) {
+      const floorLike = lastHit && Math.hypot(lastHit.x - camPosXR.x, lastHit.z - camPosXR.z) > 1.0 && camPosXR.y - lastHit.y > 0.9;
+      if (floorLike) {
+        place(lastHit);
+        tip(camAccess ? 'Готово! Нажмите на пол, чтобы переставить. Двумя пальцами — размер и поворот' : 'Готово! Нажмите на пол, чтобы переставить. Фото — скриншот телефона', 6000);
+        escBtn.hidden = true;
+      } else if (now - firstPose > 6000) {
+        placeAhead(pose);
+        tip('Пол не найден — фигура поставлена перед вами. «Сюда» — переставить', 6000);
+        escBtn.hidden = true;
+      }
+    }
+    updateLive(); renderer.render(scene, camera);
+    if (xrShotPending) {
+      xrShotPending = false;
+      try { captureXR(pose); }
+      catch (e) {
+        try { renderer.xr.enabled = true; renderer.resetState(); } catch (_) {}
+        tip('Снимок не получился — сделайте скриншот телефона', 5000);
+      }
+    } else if (warmLeft > 0 && now >= warmNext) {
+      warmLeft--; warmNext = now + 700; warmUp();
+    }
+  });
+}
+
+/* ---------- снимок прямо в AR: кадр камеры (WebXR Raw Camera Access) + фигура в высоком разрешении ---------- */
+let camAccess = null, xrShotPending = false, binding = null, blit = null;
+function readTexture(gl, tex, w, h) {   // скопировать «непрозрачную» текстуру камеры в обычную и прочитать пиксели
+  if (!blit) {
+    const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
+    const pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, 'attribute vec2 p;varying vec2 v;void main(){v=p*0.5+0.5;gl_Position=vec4(p,0.0,1.0);}'));
+    gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, 'precision mediump float;varying vec2 v;uniform sampler2D t;void main(){gl_FragColor=texture2D(t,v);}'));
+    gl.bindAttribLocation(pr, 0, 'p'); gl.linkProgram(pr);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    blit = { pr, buf, loc: gl.getUniformLocation(pr, 't') };
+  }
+  const out = gl.createTexture(); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, out);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, out, 0);
+  gl.viewport(0, 0, w, h);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE); gl.disable(gl.SCISSOR_TEST);
+  gl.colorMask(true, true, true, true);
+  if (gl.bindVertexArray) gl.bindVertexArray(null);
+  gl.useProgram(blit.pr); gl.bindBuffer(gl.ARRAY_BUFFER, blit.buf);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(blit.loc, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  const px = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  /* Обязательно отвязываем непрозрачную текстуру камеры до конца XR-кадра по спецификации WebXR Raw Camera Access */
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  gl.disableVertexAttribArray(0);
+  gl.useProgram(null);
+  gl.deleteFramebuffer(fb); gl.deleteTexture(out);
+  return px;
+}
+
+let warmRT = null;
+function warmUp() {
+  try {
+    if (!warmRT) warmRT = new THREE.WebGLRenderTarget(64, 64);
+    const prev = renderer.getRenderTarget(), retVis = reticle.visible, cam = renderer.xr.getCamera();
+    const vc = new THREE.PerspectiveCamera(); cam.matrixWorld.decompose(vc.position, vc.quaternion, vc.scale);
+    vc.projectionMatrix.copy(cam.projectionMatrix); vc.projectionMatrixInverse.copy(cam.projectionMatrixInverse);
+    reticle.visible = false; renderer.xr.enabled = false;
+    renderer.setRenderTarget(warmRT); renderer.clear(); renderer.render(scene, vc);
+    renderer.setRenderTarget(prev); renderer.xr.enabled = true; reticle.visible = retVis;
+    renderer.resetState();
+  } catch (e) { try { renderer.xr.enabled = true; renderer.resetState(); } catch (_) {} }
+}
+
+function pixelsToCanvasFlipped(px, w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'), img = g.createImageData(w, h), d = img.data;
+  const rowBytes = w * 4;
+  for (let y = 0; y < h; y++) {
+    const srcOff = (h - 1 - y) * rowBytes;
+    d.set(px.subarray(srcOff, srcOff + rowBytes), y * rowBytes);
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+function captureXR(pose) {
+  const view = pose.views[0], cam = view && view.camera;
+  if (!cam || !session || !renderer) return;
+  const gl = renderer.getContext();
+  if (gl.isContextLost()) return;
+  if (!binding) {
+    binding = (renderer.xr && typeof renderer.xr.getBinding === 'function' ? renderer.xr.getBinding() : null)
+      || new XRWebGLBinding(session, gl);
+  }
+  const tex = binding.getCameraImage(cam);
+  if (!tex) { tip('Камера не отдала кадр — сделайте скриншот телефона', 5000); return; }
+  const cw = cam.width, ch = cam.height;
+  const camPx = readTexture(gl, tex, cw, ch);
+  renderer.resetState();
+
+  /* Масштабируем итоговый снимок минимум до 1080p по короткой стороне, чтобы 3D-фигура и дата на табличке были идеально чёткими */
+  const minShort = 1080, shortSide = Math.min(cw, ch);
+  const scale = shortSide < minShort ? Math.min(minShort / shortSide, 2.5) : 1;
+  const outW = Math.round(cw * scale), outH = Math.round(ch * scale);
+
+  /* Берём точные матрицы текущего XRView без потерь на decompose */
+  const vc = new THREE.PerspectiveCamera();
+  vc.matrixAutoUpdate = false;
+  vc.matrix.fromArray(view.transform.matrix);
+  vc.matrixWorld.fromArray(view.transform.matrix);
+  vc.matrixWorldInverse.fromArray(view.transform.inverse.matrix);
+  vc.projectionMatrix.fromArray(view.projectionMatrix);
+  vc.projectionMatrixInverse.copy(vc.projectionMatrix).invert();
+
+  const rt = new THREE.WebGLRenderTarget(outW, outH);
+  rt.texture.colorSpace = THREE.SRGBColorSpace;
+  const prev = renderer.getRenderTarget(), retVis = reticle.visible;
+  reticle.visible = false; renderer.xr.enabled = false;
+  renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, vc);
+  const figPx = new Uint8Array(outW * outH * 4);
+  renderer.readRenderTargetPixels(rt, 0, 0, outW, outH, figPx);
+  renderer.setRenderTarget(prev); renderer.xr.enabled = true; reticle.visible = retVis;
+  rt.dispose();
+  renderer.resetState();
+
+  const camCanvas = pixelsToCanvasFlipped(camPx, cw, ch);
+  const figCanvas = pixelsToCanvasFlipped(figPx, outW, outH);
+
+  const out = document.createElement('canvas'); out.width = outW; out.height = outH;
+  const g = out.getContext('2d');
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.drawImage(camCanvas, 0, 0, outW, outH);
+  g.drawImage(figCanvas, 0, 0, outW, outH);
+
+  const fl = $('xrFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 60);
+  out.toBlob(showPhoto, 'image/jpeg', 0.92);
+}
+
+function onXREnd() {
+  clearTimeout(escTimer); escBtn.hidden = true; ending = false;
+  disposeScene(); session = null; root.classList.remove('webxr');
+  if (fallbackReason === 'selfie') {
+    startGyro('Селфи: фигура у вас за спиной. Пальцем можно передвинуть. Стрелки — вернуться в AR', 'user');
+  } else if (fallbackReason) {
+    if (fallbackReason === 'no-tracking') xrWorked = false;
+    startGyro(fallbackReason === 'user' ? null : 'AR-трекинг на этом телефоне не работает — включил режим камеры');
+  } else { hideRoot(); }
+}
+escBtn.addEventListener('click', () => endSession('user'));
+root.addEventListener('beforexrselect', (e) => { if (e.target.closest && e.target.closest('button')) e.preventDefault(); });
+
+/* ---------- режим 2: камера + гироскоп ---------- */
+let oriTarget = null, gotOri = false, oriFirst = true;
+let _euler = null, _q1 = null, _qScreen = null, _zAxis = null;
+function onOri(e) {
+  if (e.alpha == null && e.beta == null && e.gamma == null) return;
+  /* Игнорируем фиктивный стартовый нулевой пакет датчика на Android, чтобы камера не смотрела вертикально в пол */
+  if (e.alpha === 0 && e.beta === 0 && e.gamma === 0) return;
+  if (!THREE || !oriTarget) return;
+  if (!_euler) {
+    _euler = new THREE.Euler();
+    _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // камера смотрит из задней стороны телефона
+    _qScreen = new THREE.Quaternion();
+    _zAxis = new THREE.Vector3(0, 0, 1);
+  }
+  const r = THREE.MathUtils.degToRad;
+  const angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+  _euler.set(r(e.beta || 0), r(e.alpha || 0), -r(e.gamma || 0), 'YXZ');
+  oriTarget.setFromEuler(_euler);
+  oriTarget.multiply(_q1);
+  oriTarget.multiply(_qScreen.setFromAxisAngle(_zAxis, -r(angle)));
+  gotOri = true;
+}
+function fitView() {
+  if (!renderer || !camera) return;
+  const W = root.clientWidth || window.innerWidth, H = root.clientHeight || window.innerHeight;
+  if (!W || !H) return;
+  renderer.setSize(W, H, false); camera.aspect = W / H;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (vw && vh) {   // подогнать угол обзора 3D-камеры под реальную камеру с учётом обрезки видео под экран
+    const f = (Math.max(vw, vh) / 2) / Math.tan(THREE.MathUtils.degToRad(LONG_FOV[facing] / 2));
+    const s = Math.max(W / vw, H / vh);
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan((H / s / 2) / f));
+  }
+  camera.updateProjectionMatrix();
+}
+function placeInFront() {
+  if (!holder || !camera) return;
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  fwd.y = 0; if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); fwd.normalize();
+  const dist = DIST[facing];
+  holder.position.set(fwd.x * dist, 0, fwd.z * dist); holder.visible = true;
+  faceFrom(0, 0);
+}
+async function openCamera() {   // включить нужную камеру; при ошибке — сообщение
+  if (stream) { stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} }); stream = null; }
+  try { video.pause(); video.srcObject = null; } catch (_) {}
+  try {
+    stream = await info.requestCameraStream(facing);
+  } catch (e) {
+    showMsg(e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'PermissionDeniedError')
+      ? 'Нет доступа к камере. Нажмите значок слева от адреса сайта → «Разрешения» → «Камера» → «Разрешить», затем нажмите кнопку снова.'
+      : 'Не удалось включить камеру. Закройте другие приложения, которые её используют, и попробуйте снова.');
+    return false;
+  }
+  root.classList.toggle('mirror', facing === 'user');
+  video.addEventListener('loadedmetadata', fitView);
+  video.addEventListener('resize', fitView);
+  video.srcObject = stream;
+  try { await video.play(); } catch (e) {}
+  fitView();
+  return true;
+}
+let needPlace = false, xrWorked = false;
+const FLIP = { q: null };   // поворот на 180° вокруг вертикали телефона: фронтальная камера смотрит в другую сторону
+async function startGyro(msg, startFacing) {
+  mode = 'gyro'; root.classList.remove('webxr'); root.hidden = false;
+  facing = startFacing || 'environment';
+  $('xrHere').onclick = () => placeInFront();
+  await loadAll();
+  if (!(await openCamera())) return;
+  setupScene(false);
+  FLIP.q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+  camera.position.set(0, CAM_H, 0);
+  oriTarget = new THREE.Quaternion(); gotOri = false; oriFirst = true;
+  window.addEventListener('deviceorientation', onOri);
+  fitView();
+  tip(msg || 'Поворачивайте телефон — фигура останется на месте. Пальцем можно передвинуть', 7000);
+  const tStart = performance.now(); needPlace = true;
+  const want = new THREE.Quaternion();
+  cancelAnimationFrame(raf);
+  const loop = () => {
+    raf = requestAnimationFrame(loop);
+    if (gotOri) {
+      want.copy(oriTarget); if (facing === 'user') want.multiply(FLIP.q);
+      if (oriFirst) { camera.quaternion.copy(want); oriFirst = false; }
+      else camera.quaternion.slerp(want, 0.35);
+    }
+    if (needPlace && (gotOri || performance.now() - tStart > 700)) { placeInFront(); needPlace = false; }
+    updateLive();
+    if (renderer && scene && camera) renderer.render(scene, camera);
+  };
+  loop();
+}
+async function switchCamera() {
+  if (mode !== 'gyro' || !renderer) return;
+  facing = facing === 'user' ? 'environment' : 'user';
+  if (!(await openCamera())) return;
+  applyScale(); fitView();
+  oriFirst = true;            // сразу повернуть 3D-камеру в новую сторону
+  if (!gotOri) camera.quaternion.identity();
+  needPlace = true;           // и поставить фигуру в кадр новой камеры
+  tip(facing === 'user' ? 'Фронтальная камера: фигура у вас за спиной. Пальцем можно передвинуть' : 'Задняя камера', 4000);
+}
+function stopGyro() {
+  cancelAnimationFrame(raf); raf = 0;
+  window.removeEventListener('deviceorientation', onOri);
+  video.removeEventListener('loadedmetadata', fitView);
+  video.removeEventListener('resize', fitView);
+  if (stream) { stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} }); stream = null; }
+  try { video.pause(); video.srcObject = null; } catch (_) {}
+  root.classList.remove('mirror'); facing = 'environment';
+  disposeScene();
+}
+window.addEventListener('resize', () => { if (mode === 'gyro') fitView(); });
+
+/* ---------- жесты в режиме камеры (gyro) и WebXR (xr): один палец — двигать, два — размер и поворот ---------- */
+const pts = {};
+let ray = null, floorPlane = null;
+function floorAt(x, y, planeY = 0) {
+  const r = root.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  if (!ray) ray = new THREE.Raycaster();
+  if (!floorPlane) floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  floorPlane.constant = -planeY;
+  let nx = (x - r.left) / r.width * 2 - 1;
+  if (mode === 'gyro' && facing === 'user') nx = -nx;   // картинка зеркальная
+  const ny = -((y - r.top) / r.height) * 2 + 1;
+  const activeCam = (mode === 'xr' && renderer) ? renderer.xr.getCamera() : camera;
+  if (!activeCam) return null;
+  ray.setFromCamera(new THREE.Vector2(nx, ny), activeCam);
+  /* Если луч идёт выше горизонта или почти параллельно полу, пересечение с плоскостью пола улетает в бесконечность */
+  if (ray.ray.direction.y > -0.18) return null;
+  const out = new THREE.Vector3();
+  return ray.ray.intersectPlane(floorPlane, out) ? out : null;
+}
+function moveHolderByScreenDelta(dx, dy) {
+  if (!holder) return;
+  const r = root.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const activeCam = (mode === 'xr' && renderer) ? renderer.xr.getCamera() : camera;
+  if (!activeCam) return;
+  const originX = (mode === 'xr' && camPosXR) ? camPosXR.x : 0;
+  const originZ = (mode === 'xr' && camPosXR) ? camPosXR.z : 0;
+  const relX = holder.position.x - originX;
+  const relZ = holder.position.z - originZ;
+  const dist = Math.max(1.2, Math.hypot(relX, relZ));
+
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(activeCam.quaternion);
+  fwd.y = 0; if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); fwd.normalize();
+  const right = new THREE.Vector3(fwd.z, 0, -fwd.x); // вправо относительно взгляда камеры (-Z -> +X)
+
+  const signX = (mode === 'gyro' && facing === 'user') ? -1 : 1;
+  const lateral = (dx / r.width) * dist * 1.15 * signX;
+  const depthStep = -(dy / r.height) * dist * 1.35;
+
+  holder.position.x += right.x * lateral + fwd.x * depthStep;
+  holder.position.z += right.z * lateral + fwd.z * depthStep;
+}
+function clampHolderDistance() {
+  const originX = (mode === 'xr' && camPosXR) ? camPosXR.x : 0;
+  const originZ = (mode === 'xr' && camPosXR) ? camPosXR.z : 0;
+  const dx = holder.position.x - originX, dz = holder.position.z - originZ;
+  const len = Math.hypot(dx, dz);
+  if (len > 12) {
+    holder.position.x = originX + dx * (12 / len);
+    holder.position.z = originZ + dz * (12 / len);
+  } else if (len < 1.2 && len > 0) {
+    holder.position.x = originX + dx * (1.2 / len);
+    holder.position.z = originZ + dz * (1.2 / len);
+  }
+  faceFrom(originX, originZ);
+}
+function pair() {
+  const k = Object.keys(pts); if (k.length < 2) return null; const a = pts[k[0]], b = pts[k[1]];
+  return { d: Math.hypot(b.x - a.x, b.y - a.y), ang: Math.atan2(b.y - a.y, b.x - a.x) };
+}
+root.addEventListener('pointerdown', (e) => {
+  if ((mode !== 'gyro' && mode !== 'xr') || !holder || e.target.closest('button') || !$('xrResult').hidden || !$('xrMsg').hidden) return;
+  pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+  if (Object.keys(pts).length >= 2) lastPinchTime = performance.now();
+  try { root.setPointerCapture(e.pointerId); } catch (_) {}
+});
+root.addEventListener('pointermove', (e) => {
+  if (!pts[e.pointerId] || !holder || !holder.visible) return;
+  const before = pair(), prev = pts[e.pointerId];
+  const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+  const after = pair();
+  const originX = (mode === 'xr' && camPosXR) ? camPosXR.x : 0;
+  const originZ = (mode === 'xr' && camPosXR) ? camPosXR.z : 0;
+  if (before && after) {
+    lastPinchTime = performance.now();
+    figScale = Math.min(Math.max(figScale * after.d / Math.max(before.d, 1), 0.4), 2.2);
+    applyScale();
+    userYaw += (mode === 'gyro' && facing === 'user' ? 1 : -1) * (after.ang - before.ang);
+    faceFrom(originX, originZ);
+  } else if (Object.keys(pts).length === 1 && mode === 'gyro') {
+    const a = floorAt(prev.x, prev.y, holder.position.y), b = floorAt(e.clientX, e.clientY, holder.position.y);
+    if (a && b && a.distanceTo(b) < 2.5) {
+      holder.position.x += b.x - a.x;
+      holder.position.z += b.z - a.z;
+    } else {
+      moveHolderByScreenDelta(dx, dy);
+    }
+    holder.position.y = 0;
+    clampHolderDistance();
+  }
+});
+const up = (e) => {
+  if (Object.keys(pts).length >= 2) lastPinchTime = performance.now();
+  delete pts[e.pointerId];
+};
+root.addEventListener('pointerup', up); root.addEventListener('pointercancel', up);
+
+/* ---------- снимок в режиме камеры: кадр камеры + 3D-фигура ---------- */
+function fileName() {
+  const n = new Date(), p = (x) => (x < 10 ? '0' : '') + x;
+  return 'ar-foto-' + n.getFullYear() + p(n.getMonth() + 1) + p(n.getDate()) + '-' + p(n.getHours()) + p(n.getMinutes()) + p(n.getSeconds()) + '.jpg';
+}
+function shoot() {
+  const W = root.clientWidth || window.innerWidth, H = root.clientHeight || window.innerHeight;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh || !renderer) return;
+  const s = Math.max(W / vw, H / vh), sw = W / s, sh = H / s, sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+  const c = document.createElement('canvas'); c.width = Math.round(sw); c.height = Math.round(sh);
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.save();
+  if (facing === 'user') { g.translate(c.width, 0); g.scale(-1, 1); }   // как на экране
+  g.drawImage(video, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  updateLive(); renderer.render(scene, camera);
+  g.drawImage(renderer.domElement, 0, 0, c.width, c.height);
+  g.restore();
+  const fl = $('xrFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 60);
+  c.toBlob(showPhoto, 'image/jpeg', 0.92);
+}
+function showPhoto(b) {
+  if (!b) return;
+  photoBlob = b; if (photoUrl) URL.revokeObjectURL(photoUrl); photoUrl = URL.createObjectURL(b);
+  $('xrPhoto').src = photoUrl; $('xrNote').textContent = '';
+  const file = new File([b], fileName(), { type: 'image/jpeg' });
+  $('xrShare').hidden = !(navigator.canShare && navigator.canShare({ files: [file] }));
+  $('xrResult').hidden = false;
+}
+$('xrShot').addEventListener('click', () => {
+  if (busy) return;
+  if (mode === 'xr' && !camAccess) return;
+  if (mode !== 'gyro' && mode !== 'xr') return;
+  busy = true;
+  const go = () => { if (mode === 'xr') xrShotPending = true; else shoot(); busy = false; };
+  if (!timerOn) { go(); return; }
+  let n = 3; const el = $('xrCount'); el.hidden = false; el.textContent = n;
+  clearInterval(countTimer);
+  countTimer = setInterval(() => {
+    n--;
+    if (n <= 0) { clearInterval(countTimer); countTimer = 0; el.hidden = true; go(); }
+    else el.textContent = n;
+  }, 1000);
+});
+$('xrSwitch').addEventListener('click', () => {
+  if (mode === 'xr') { endSession('selfie'); return; }
+  if (mode !== 'gyro') return;
+  if (facing === 'user' && xrWorked) { backToXR(); return; }
+  switchCamera();
+});
+async function backToXR() {   // нажатие кнопки — разрешение браузера на запуск AR есть
+  stopGyro(); mode = 'loading'; tip('Запускаю AR…');
+  try { await startXR(null); }
+  catch (e) { disposeScene(); session = null; root.classList.remove('webxr'); xrWorked = false; startGyro('AR не запустился — включил режим камеры'); }
+}
+$('xrTimer').addEventListener('click', function () { timerOn = !timerOn; this.setAttribute('aria-pressed', timerOn ? 'true' : 'false'); });
+$('xrTurn').addEventListener('click', () => { if (!holder) return; userYaw += Math.PI; holder.rotation.y += Math.PI; });
+$('xrRetake').addEventListener('click', () => { $('xrResult').hidden = true; });
+$('xrSave').addEventListener('click', () => {
+  if (!photoUrl) return;
+  const a = document.createElement('a'); a.href = photoUrl; a.download = fileName();
+  document.body.appendChild(a); a.click(); a.remove();
+  $('xrNote').textContent = 'Фото скачивается в папку «Загрузки». В галерее оно появится через несколько секунд.';
+});
+$('xrShare').addEventListener('click', () => {
+  if (!photoBlob) return;
+  navigator.share({ files: [new File([photoBlob], fileName(), { type: 'image/jpeg' })], title: 'AR-фото' }).catch(() => {});
+});
+
+/* ---------- открыть / закрыть ---------- */
+function hideRoot() {
+  if (countTimer) { clearInterval(countTimer); countTimer = 0; busy = false; }
+  if (live && !preview) live.video.pause();
+  root.hidden = true; mode = null; tip('');
+  $('xrResult').hidden = true; $('xrMsg').hidden = true; $('xrCount').hidden = true;
+  if (photoUrl) { URL.revokeObjectURL(photoUrl); photoUrl = null; }
+}
+function closeAll(fromPop) {
+  if (session) endSession(null);
+  else { if (mode === 'gyro') stopGyro(); hideRoot(); }
+  if (!fromPop) { try { if (history.state && history.state.xr) history.back(); } catch (e) {} }
+}
+window.__closeXR = () => { if (!root.hidden || session) closeAll(true); };
+$('xrClose').addEventListener('click', () => closeAll(false));
+$('xrMsgClose').addEventListener('click', () => closeAll(false));
+window.addEventListener('popstate', () => { if (!root.hidden || session) closeAll(true); });
+
+window.arStart = async function () {
+  if (mode) return;
+  if (window.__closeCam) window.__closeCam();
+  playLive();
+  /* iPhone вне Safari: разрешение на гироскоп спрашивается только прямо в момент нажатия */
+  let oriPerm = null;
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    oriPerm = DeviceOrientationEvent.requestPermission().catch(() => 'denied');
+  }
+  root.hidden = false; mode = 'loading'; tip('Загружаю фигуру…');
+  try { history.pushState({ xr: 1 }, ''); } catch (e) {}
+
+  /* Важно для Android: запрашиваем WebXR-сессию сразу внутри жеста клика, не теряя Transient User Activation на ожидание loadAll() */
+  let preSession = null;
+  const canTryXR = xrSupportedCached !== null ? xrSupportedCached : (navigator.xr && !info.isIOS);
+  if (canTryXR && navigator.xr && typeof navigator.xr.requestSession === 'function') {
+    try {
+      preSession = await requestXRSession();
+    } catch (_) {
+      preSession = null;
+    }
+  }
+
+  try {
+    await loadAll();
+    playLive();
+  } catch (e) {
+    if (preSession) preSession.end().catch(() => {});
+    hideRoot(); try { if (history.state && history.state.xr) history.back(); } catch (_) {}
+    if (info.setStatus) info.setStatus('Не удалось загрузить 3D-фигуру. Проверьте интернет или нажмите «Фото с фигурой».');
+    return;
+  }
+
+  if (preSession || (xrSupportedCached === null && await xrSupportPromise)) {
+    try { await startXR(preSession); return; }
+    catch (e) {
+      if (preSession) preSession.end().catch(() => {});
+      disposeScene(); session = null; root.classList.remove('webxr');
+    }
+  }
+  if (oriPerm) await oriPerm;
+  const hadXR = preSession !== null || xrSupportedCached === true;
+  startGyro(hadXR ? 'AR на этом телефоне не запустился — включил режим камеры' : null);
+};
+
+/* ---------- превью на странице: живая фигура, пальцем можно повернуть ---------- */
+let preview = null;
+liveMeta.then(async (meta) => {
+  if (!meta) return;
+  const stage = document.querySelector('.stage'), mv = document.getElementById('mv');
+  if (!stage || !mv) return;
+  try { await loadAll(); } catch (e) { return; }
+  if (!live) return;
+  const cv = document.createElement('canvas'); cv.className = 'live-preview';
+  stage.insertBefore(cv, stage.firstChild.nextSibling);
+  mv.classList.add('mv-hidden');
+  const r = new THREE.WebGLRenderer({ canvas: cv, alpha: true, antialias: true });
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); r.setClearColor(0x000000, 0);
+  const sc = new THREE.Scene(), cam = new THREE.PerspectiveCamera(26, 1, 0.1, 50);
+  const g = new THREE.Group(); g.add(figure.clone(true)); sc.add(g);
+  const box = new THREE.Box3().setFromObject(g), hgt = box.max.y - box.min.y;
+  cam.position.set(0, box.min.y + hgt * 0.52, hgt / (2 * Math.tan(THREE.MathUtils.degToRad(13))) * 1.12);
+  cam.lookAt(0, box.min.y + hgt * 0.5, 0);
+  let yaw = -0.25, drag = null, visible = true;
+  const size = () => { const w = cv.clientWidth, h = cv.clientHeight; if (w && h) { r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); } };
+  new ResizeObserver(size).observe(cv); size();
+  new IntersectionObserver((e) => { visible = e[0].isIntersecting; }).observe(cv);
+  cv.addEventListener('pointerdown', (e) => { drag = e.clientX; try { cv.setPointerCapture(e.pointerId); } catch (_) {} });
+  cv.addEventListener('pointermove', (e) => { if (drag == null) return; yaw += (e.clientX - drag) * 0.01; drag = e.clientX; });
+  cv.addEventListener('pointerup', () => { drag = null; }); cv.addEventListener('pointercancel', () => { drag = null; });
+  preview = { r };
+  live.video.play().catch(() => {});
+  const tick = () => {
+    requestAnimationFrame(tick);
+    if (!visible || mode) return;          // пока открыт AR — превью не рисуем
+    if (live.video.paused) live.video.play().catch(() => {});
+    g.rotation.y = yaw; updateLive(); r.render(sc, cam);
+  };
+  tick();
+});
+</script>
+</body>
+</html>
