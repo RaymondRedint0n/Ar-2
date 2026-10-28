@@ -381,7 +381,7 @@ model-viewer::part(default-ar-button){display:none}
     g.fillRect(225,285,270,690);
     g.fillRect(240,975,105,480); g.fillRect(375,975,105,480);
     if(!isBack && window.__makeDateCanvas){
-      var dc=window.__makeDateCanvas(false);
+      var dc=window.__makeDateCanvas();
       g.drawImage(dc, 90, 330, 330, 456);
     }
     return c.toDataURL('image/png');
@@ -532,7 +532,7 @@ model-viewer::part(default-ar-button){display:none}
 <script type="module">
 /* «Поставить в комнату» на Android и не-Safari.
    1) Если телефон умеет WebXR — свой AR-сеанс (исправлена потеря жеста пользователя, защита от краша Chrome 147+ на XRProjectionLayer,
-      анизотропная фильтрация 16x, сглаживание краёв alphaToCoverage и рендер снимка в 2K разрешении).
+      анизотропная фильтрация, синхронизация герцовки видео 24fps на iOS и рендер снимка в 2K разрешении).
    2) Камера + гироскоп: видео с камеры, поверх 3D-фигура; при повороте телефона фигура остаётся на месте. ARCore не нужен. */
 const $ = (id) => document.getElementById(id);
 const info = window.__arInfo || {};
@@ -541,6 +541,7 @@ const MODEL = info.model || 'standee.glb';
 const CAM_H = 1.5;                              // высота телефона над полом в режиме гироскопа, м
 const DIST = { environment: 3.0, user: 2.6 };   // на каком расстоянии ставить фигуру, м (для селфи — ближе)
 const LONG_FOV = { environment: 68, user: 76 }; // угол обзора камеры по длинной стороне, градусы
+const MAX_DPR = info.isIOS ? 2 : 3;             // на iOS DPR=2 исключает просадки VSync (120/60 Гц) при полноэкранном рендере
 let facing = 'environment';                      // 'environment' — задняя камера, 'user' — фронтальная
 let figScale = 1;
 
@@ -600,15 +601,14 @@ function dateParts() {
     .formatToParts(new Date()).forEach((x) => { p[x.type] = x.value; });
   return p;
 }
-function dateCanvasSync(transparentBg = false) {
+function dateCanvasSync() {
   const W = 1200, H = 1660, k = 2, c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d'), d = dateParts(), pad = 46 * k, mw = W - 2 * pad;
   const BOLD = '"Oswald","Arial Narrow",Arial,sans-serif', REG = '"Manrope",Arial,sans-serif';
   const fit = (text, weight, fam, size) => { do { g.font = `${weight} ${size}px ${fam}`; size -= 4; } while (g.measureText(text).width > mw && size > 20); return size + 4; };
-  if (transparentBg) g.clearRect(0, 0, W, H);
-  else { g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); }
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
   g.textBaseline = 'alphabetic'; g.textAlign = 'left';
-  g.font = `600 ${40 * k}px ${BOLD}`; g.fillStyle = '#6e6e73';
+  g.font = `600 ${40 * k}px ${BOLD}`; g.fillStyle = '#78787c';
   const top = 'СЕГОДНЯ', sp = 10 * k; let tw = 0; for (const ch of top) tw += g.measureText(ch).width; tw += sp * (top.length - 1);
   let x = (W - tw) / 2; for (const ch of top) { g.fillText(ch, x, 92 * k); x += g.measureText(ch).width + sp; }
   g.fillStyle = '#f26b14'; g.fillRect(W / 2 - 60 * k, 112 * k, 120 * k, 8 * k);
@@ -620,24 +620,24 @@ function dateCanvasSync(transparentBg = false) {
   const month = (d.month || '').toUpperCase(), ms = fit(month, 600, BOLD, 96 * k);
   g.font = `600 ${ms}px ${BOLD}`; g.fillStyle = '#f26b14';
   g.fillText(month, (W - g.measureText(month).width) / 2, y + ms * 0.8); y += ms + 26 * k;
-  g.fillStyle = '#b8b8be'; g.fillRect(pad + 40 * k, y, W - 2 * pad - 80 * k, 4 * k); y += 30 * k;
+  g.fillStyle = '#cdcdd0'; g.fillRect(pad + 40 * k, y, W - 2 * pad - 80 * k, 4 * k); y += 30 * k;
   const wd = d.weekday || '', ws = fit(wd, 400, REG, 64 * k);
   g.font = `400 ${ws}px ${REG}`; g.fillStyle = '#18181a'; g.fillText(wd, (W - g.measureText(wd).width) / 2, y + ws * 0.8); y += ws + 20 * k;
-  g.font = `400 ${40 * k}px ${REG}`; g.fillStyle = '#6e6e73'; g.fillText(d.year || '', (W - g.measureText(d.year || '').width) / 2, y + 32 * k);
+  g.font = `400 ${40 * k}px ${REG}`; g.fillStyle = '#78787c'; g.fillText(d.year || '', (W - g.measureText(d.year || '').width) / 2, y + 32 * k);
   return c;
 }
-async function dateCanvas(transparentBg = false) {   // табличка: СЕГОДНЯ / число / месяц / день недели / год
+async function dateCanvas() {   // табличка как в статичной фигуре: СЕГОДНЯ / число / месяц / день недели / год
   try { await Promise.all([document.fonts.load('600 200px Oswald'), document.fonts.load('400 60px Manrope')]); } catch (e) {}
-  return dateCanvasSync(transparentBg);
+  return dateCanvasSync();
 }
 window.__makeDateCanvas = dateCanvasSync;
 
 /* Запасная 3D-фигура, если standee.glb недоступен (например, при открытии одного HTML без сервера) */
 async function createProceduralStandee() {
   const grp = new THREE.Group();
-  const cardTex = new THREE.CanvasTexture(await dateCanvas(false));
+  const cardTex = new THREE.CanvasTexture(await dateCanvas());
   cardTex.colorSpace = THREE.SRGBColorSpace;
-  cardTex.anisotropy = 16;
+  cardTex.anisotropy = 8;
   const cardMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(0.42, 0.58),
     new THREE.MeshBasicMaterial({ map: cardTex, side: THREE.DoubleSide })
@@ -647,14 +647,14 @@ async function createProceduralStandee() {
   return grp;
 }
 
-/* Применяет максимальную анизотропную фильтрацию GPU ко всем текстурам 3D-фигуры для чёткости под углом */
+/* Применяет анизотропную фильтрацию GPU только к мипмап-текстурам 3D-фигуры */
 function applyMaxAnisotropy(rootObj, maxAniso) {
   if (!rootObj || !maxAniso) return;
+  const targetAniso = Math.min(maxAniso, 8);
   rootObj.traverse((o) => {
     if (o.isMesh && o.material) {
       const m = o.material;
-      if (m.map) { m.map.anisotropy = maxAniso; m.map.needsUpdate = true; }
-      if (m.alphaMap) { m.alphaMap.anisotropy = maxAniso; m.alphaMap.needsUpdate = true; }
+      if (m.map && m.map.generateMipmaps) { m.map.anisotropy = targetAniso; m.map.needsUpdate = true; }
     }
   });
 }
@@ -669,19 +669,18 @@ function loadAll() {
       const g = await new GLTFLoader().loadAsync(MODEL);
       figure = g.scene;
       figure.traverse((o) => {
-        if (o.isMesh) {   // фото без освещения с трилинейными мипмапами, анизотропией 16x и сглаживанием краёв alphaToCoverage
+        if (o.isMesh) {   // фото без освещения: без alphaToCoverage (вызывавшего мерцание сэмплов на iOS WebKit/Metal)
           const m = o.material;
           if (m.map) {
             m.map.colorSpace = THREE.SRGBColorSpace;
             m.map.minFilter = THREE.LinearMipmapLinearFilter;
             m.map.magFilter = THREE.LinearFilter;
             m.map.generateMipmaps = true;
-            m.map.anisotropy = 16;
+            m.map.anisotropy = 8;
           }
           o.material = new THREE.MeshBasicMaterial({
             map: m.map,
-            alphaTest: 0.4,
-            alphaToCoverage: true,
+            alphaTest: 0.5,
             side: THREE.FrontSide
           });
         }
@@ -697,7 +696,7 @@ function loadAll() {
 /* Предзагружаем сразу при открытии страницы */
 loadAll().catch(() => {});
 
-/* ---------- «живое фото»: видео спереди (слева цвет, справа прозрачность) + бесшовная дата на табличке ---------- */
+/* ---------- «живое фото»: видео спереди (слева цвет, справа прозрачность) + дата на табличке ---------- */
 let live = null;
 const liveJsonUrl = new URL('live.json', location.href).href;
 const liveMeta = fetch(liveJsonUrl, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
@@ -709,26 +708,21 @@ async function setupLive() {
   v.src = 'live.mp4' + (meta.v ? '?v=' + meta.v : '');
   v.muted = true; v.loop = true; v.playsInline = true; v.crossOrigin = 'anonymous';
   v.setAttribute('playsinline', ''); v.setAttribute('muted', ''); v.preload = 'auto';
-  /* видео в DOM (невидимое): Chrome на Android не останавливает декодирование «отсоединённого» видео в режиме AR */
+  /* видео в DOM (невидимое): Chrome на Android и Safari на iOS не останавливают декодирование */
   v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
   document.body.appendChild(v);
 
-  /* Аппаратная сборка кадра 1080p без блокирующего CPU getImageData:
-     левая половина кадра (цвет) рисуется в colorCanvas, правая (маска прозрачности) — в alphaCanvas */
+  /* Аппаратная сборка кадра без мипмапов на динамическом видео (пересборка мипмапов в каждом кадре на iPhone вызывала мерцание герцовки) */
   const W = meta.w, H = meta.h;
   const colorCanvas = document.createElement('canvas'); colorCanvas.width = W; colorCanvas.height = H;
   const colorCtx = colorCanvas.getContext('2d');
-  colorCtx.imageSmoothingEnabled = true; colorCtx.imageSmoothingQuality = 'high';
   const alphaCanvas = document.createElement('canvas'); alphaCanvas.width = W; alphaCanvas.height = H;
   const alphaCtx = alphaCanvas.getContext('2d');
-  alphaCtx.imageSmoothingEnabled = true; alphaCtx.imageSmoothingQuality = 'high';
 
   const tex = new THREE.CanvasTexture(colorCanvas); tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = true; tex.anisotropy = 16;
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
   const aTex = new THREE.CanvasTexture(alphaCanvas);
-  aTex.minFilter = THREE.LinearMipmapLinearFilter; aTex.magFilter = THREE.LinearFilter;
-  aTex.generateMipmaps = true; aTex.anisotropy = 16;
+  aTex.minFilter = THREE.LinearFilter; aTex.magFilter = THREE.LinearFilter; aTex.generateMipmaps = false;
 
   const compose = () => {
     colorCtx.drawImage(v, 0, 0, W, H, 0, 0, W, H);
@@ -739,33 +733,31 @@ async function setupLive() {
   const mat = new THREE.MeshBasicMaterial({
     map: tex,
     alphaMap: aTex,
-    alphaTest: 0.35,
-    alphaToCoverage: true,
+    alphaTest: 0.5,
     side: THREE.FrontSide
   });
   const S = meta.heightM / (meta.bottom - meta.top);   // метров на пиксель
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(meta.w * S, meta.h * S), mat);
-  plane.position.set((meta.w / 2 - meta.feetX) * S, (meta.bottom - meta.h / 2) * S, 0.0045);
+  plane.position.set((meta.w / 2 - meta.feetX) * S, (meta.bottom - meta.h / 2) * S, 0.006);
   plane.renderOrder = 1;
 
-  /* Табличка с датой на прозрачном фоне в разрешении 1200x1660: ложится прямо на реальный белый лист в руках балерины без швов */
-  const dTex = new THREE.CanvasTexture(await dateCanvas(true));
+  /* Табличка с датой: вынесена на z = 0.0085 (2.5 мм впереди плоскости видео z = 0.006), чтобы на iPhone не было Z-fighting мерцания */
+  const dTex = new THREE.CanvasTexture(await dateCanvas());
   dTex.colorSpace = THREE.SRGBColorSpace;
   dTex.minFilter = THREE.LinearMipmapLinearFilter;
   dTex.magFilter = THREE.LinearFilter;
   dTex.generateMipmaps = true;
-  dTex.anisotropy = 16;
+  dTex.anisotropy = 8;
   const dGeo = new THREE.BufferGeometry();
   dGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
   dGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]), 2));
   dGeo.setIndex([0, 3, 1, 1, 3, 2]);
   const dMesh = new THREE.Mesh(dGeo, new THREE.MeshBasicMaterial({
     map: dTex,
-    transparent: true,
-    depthWrite: false,
+    color: 0xf0f0f2,
     polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -1
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2
   }));
   dMesh.renderOrder = 2; dMesh.frustumCulled = false;
   const front = figure.getObjectByName('front'); if (front) front.visible = false;
@@ -773,19 +765,21 @@ async function setupLive() {
   live = { meta, video: v, tex, aTex, compose, lastT: -1, S, dGeo, last: -1 };
   updateLive(true);
 }
-function updateLive(force) {   // загрузить текущий кадр видео и поставить дату на табличку
+function updateLive(force) {   // синхронно обновлять текстуру видео и табличку строго на частоте кадров видео (24 fps), а не 60/120 Гц экрана
   if (!live) return;
-  if (live.video.readyState >= 2 && live.video.currentTime !== live.lastT) {
-    live.lastT = live.video.currentTime;
-    try { live.compose(); } catch (e) {}
-  }
   if (live.video.paused && mode) live.video.play().catch(() => {});
   const m = live.meta, n = m.frames;
+  const hasFrame = live.video.readyState >= 2 && !live.video.seeking;
   const f = Math.min(n - 1, Math.floor((live.video.currentTime || 0) * m.fps) % n);
   if (f === live.last && !force) return;
+  if (hasFrame) {
+    try { live.compose(); } catch (e) {}
+  } else if (!force) {
+    return;
+  }
   live.last = f;
   const q = m.sign[f], S = live.S, pos = live.dGeo.attributes.position;
-  for (let i = 0; i < 4; i++) pos.setXYZ(i, (q[i][0] - m.feetX) * S, (m.bottom - q[i][1]) * S, 0.0048);
+  for (let i = 0; i < 4; i++) pos.setXYZ(i, (q[i][0] - m.feetX) * S, (m.bottom - q[i][1]) * S, 0.0085);
   pos.needsUpdate = true; live.dGeo.computeBoundingSphere();
 }
 function playLive() { if (live) live.video.play().catch(() => {}); }
@@ -809,7 +803,7 @@ function setupScene(xr) {
   const W = root.clientWidth || window.innerWidth, H = root.clientHeight || window.innerHeight;
   renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: !xr, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_DPR));
   renderer.setSize(W, H, false);
   renderer.setClearColor(0x000000, 0);
   renderer.xr.enabled = xr;
@@ -1444,9 +1438,11 @@ liveMeta.then(async (meta) => {
   const cv = document.createElement('canvas'); cv.className = 'live-preview';
   stage.insertBefore(cv, stage.firstChild.nextSibling);
   mv.classList.add('mv-hidden');
+  /* Освобождаем 3D-рендер model-viewer на странице живой фигуры, чтобы два WebGL-контекста не конкурировали за VSync на iPhone */
+  if (!info.isIOS) mv.removeAttribute('src');
   const r = new THREE.WebGLRenderer({ canvas: cv, alpha: true, antialias: true });
   r.outputColorSpace = THREE.SRGBColorSpace;
-  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3)); r.setClearColor(0x000000, 0);
+  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_DPR)); r.setClearColor(0x000000, 0);
   applyMaxAnisotropy(figure, r.capabilities.getMaxAnisotropy());
   const sc = new THREE.Scene(), cam = new THREE.PerspectiveCamera(26, 1, 0.1, 50);
   const g = new THREE.Group(); g.add(figure.clone(true)); sc.add(g);

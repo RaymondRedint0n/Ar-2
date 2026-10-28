@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from scipy import ndimage
 
 TZ = ZoneInfo('Asia/Yekaterinburg')      # дата меняется в полночь по Екатеринбургу
-GAP = 0.004                              # половина толщины «картона», м
+GAP = 0.006                              # половина толщины «картона», м (12 мм между передом и спиной против Z-fighting на iPhone)
 ROOT = os.path.dirname(os.path.abspath(__file__))
 A = os.path.join(ROOT, 'assets')         # здесь же лежат шрифты
 OUT = os.path.join(ROOT, '_site')
@@ -268,7 +268,7 @@ def export_standee_glb(front_im, back_im, height_m, out_path, target_center_3d=N
                 'emissiveTexture': {'index': 0},
                 'emissiveFactor': [0.22, 0.22, 0.22],
                 'alphaMode': 'MASK',
-                'alphaCutoff': 0.4,
+                'alphaCutoff': 0.5,
                 'doubleSided': False,
             },
             {
@@ -281,7 +281,7 @@ def export_standee_glb(front_im, back_im, height_m, out_path, target_center_3d=N
                 'emissiveTexture': {'index': 1},
                 'emissiveFactor': [0.22, 0.22, 0.22],
                 'alphaMode': 'MASK',
-                'alphaCutoff': 0.4,
+                'alphaCutoff': 0.5,
                 'doubleSided': False,
             },
         ],
@@ -386,10 +386,6 @@ def build_figure(d, cfg):
     # Если есть живое видео (балерина), синхронизируем 3D-центр мешей standee.glb с силуэтом в live.mp4
     target_center_3d = None
     if cfg.get('live') and os.path.exists(os.path.join(folder, 'live.json')):
-        with open(os.path.join(folder, 'live.json'), encoding='utf-8') as fh:
-            lm_align = json.load(fh)
-        S_live = lm_align['heightM'] / (lm_align['bottom'] - lm_align['top'])
-        # В первом кадре live.mp4 силуэт балерины центрируется вокруг +0.0468 м относительно feetX
         target_center_3d = 0.0468
 
     os.makedirs(out, exist_ok=True)
@@ -437,14 +433,16 @@ def build_figure(d, cfg):
     print('  ', cfg['out'] or '(главная)', '->', out, f'({front.size[0]}x{front.size[1]})')
 
 
-def build_live_usdz(d, folder, out, back, S_static, fps=16, scale=None):
-    """Живая фигура для AR от Apple (iPhone): кадры видео в высоком разрешении без зернистого дизеринга."""
+def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
+    """Живая фигура для AR от Apple (iPhone):
+    - fps=12 кратна и 24fps исходного видео (step=2), и экранам iPhone 60Hz (5x) / 120Hz ProMotion (10x);
+    - TPS=2400 (0.4 мс на тик) и перекрытие ключей [a, b] на 1 тик полностью исключают мерцание/провал масштаба между кадрами."""
     import subprocess, tempfile
     from pxr import Usd, UsdGeom, UsdShade, UsdUtils, Sdf, Gf, Vt
     with open(os.path.join(folder, 'live.json'), encoding='utf-8') as fh:
         meta = json.load(fh)
     if scale is None:
-        scale = min(1.0, 960 / meta['h'])
+        scale = min(1.0, 720 / meta['h'])
     step = max(1, round(meta['fps'] / fps))
     W, H = meta['w'], meta['h']
     tw, th = int(W * scale) // 2 * 2, int(H * scale) // 2 * 2
@@ -487,13 +485,17 @@ def build_live_usdz(d, folder, out, back, S_static, fps=16, scale=None):
         _, (jy, jx) = ndimage.distance_transform_edt(~inside2, return_indices=True)
         cv[:, :, :3] = cv[:, :, :3][jy, jx]          # поля тоже залиты цветом края (прозрачные)
         rgba = Image.fromarray(cv, 'RGBA'); img_w, img_h = round(tw * fit_k), round(th * fit_k)
-        rgba.save(os.path.join(tex, f'f{i:03d}.png'), optimize=True)
+        # Палитровое сжатие БЕЗ дизеринга (dither=NONE): лёгкие текстуры для памяти iPhone и чистые цвета без сетки точек
+        rgba.quantize(256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE) \
+            .save(os.path.join(tex, f'f{i:03d}.png'), optimize=True)
 
     def make(variant):
         usda = os.path.join(tmp, f'{variant}.usdc')
         st = Usd.Stage.CreateNew(usda)
         UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.y); UsdGeom.SetStageMetersPerUnit(st, 1.0)
-        TPS = 240; span = TPS // fps; end = len(seq) * span
+        # Высокая частота таймкодов (2400 делений в секунду = 0.4 мс на деление) + перекрытие соседних кадров на границе b:
+        # на экранах iPhone 60Hz / 120Hz ProMotion предыдущий кадр держит полный размер (1,1,1) до полного включения следующего.
+        TPS = 2400; span = TPS // fps; end = len(seq) * span
         if variant != 'test-static':
             st.SetStartTimeCode(0); st.SetEndTimeCode(end); st.SetTimeCodesPerSecond(TPS); st.SetFramesPerSecond(TPS)
         root = UsdGeom.Xform.Define(st, '/Root'); st.SetDefaultPrim(root.GetPrim())
@@ -538,24 +540,26 @@ def build_live_usdz(d, folder, out, back, S_static, fps=16, scale=None):
         yt, yb = meta['bottom'] * S, (meta['bottom'] - H) * S
         xr = xl + (xr - xl) * TEXW / img_w
         yb = yt - (yt - yb) * TEXH / img_h
-        cx, cy, z = (xl + xr) / 2, (yt + yb) / 2, 0.01
+        cx, cy = (xl + xr) / 2, (yt + yb) / 2
         pts = [(xl - cx, yb - cy, 0), (xr - cx, yb - cy, 0), (xr - cx, yt - cy, 0), (xl - cx, yt - cy, 0)]
         UsdGeom.Xform.Define(st, '/Root/Live')
         tiny = Gf.Vec3f(0.0001, 0.0001, 0.0001)
         for i in (range(1) if variant == 'test-static' else range(n)):
             x = UsdGeom.Xform.Define(st, f'/Root/Live/F{i:03d}')
-            x.AddTranslateOp().Set(Gf.Vec3d(cx, cy, z))
+            # Чередуем микро-ступеньку по Z (0.3 мм) между чётными и нечётными кадрами, чтобы на 0.4 мс перекрытии не было Z-fighting
+            z_frame = 0.01 + (i % 2) * 0.0003
+            x.AddTranslateOp().Set(Gf.Vec3d(cx, cy, z_frame))
             if variant == 'test-static':
                 plane(f'/Root/Live/F{i:03d}/Quad', pts, material(f'M{i:03d}', f'f{i:03d}.png'))
                 continue
             sop = x.AddScaleOp() if variant == 'live' else None
             one = Gf.Vec3f(1, 1, 1)
             keys = {}
-            for pos in [p for p, v in enumerate(seq) if v == i]:
+            for pos in [p for p, v in enumerate(seq) if v == i]:   # кадр держит полный размер [a, b] включительно (без провала на границе!)
                 a, b = pos * span, (pos + 1) * span
                 if a > 0: keys[a - 1] = tiny
-                keys[a] = one; keys[b - 1] = one
-                if b < end: keys[b] = tiny
+                keys[a] = one; keys[b] = one
+                if b + 1 <= end: keys[b + 1] = tiny
             keys.setdefault(0, tiny)
             last = max(p for p, v in enumerate(seq) if v == i)
             keys[end] = one if (last + 1) * span == end else tiny
