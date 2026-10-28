@@ -1,19 +1,19 @@
-"""Собирает сайт AR-фото: вписывает сегодняшнюю дату в табличку и собирает standee.glb.
+"""Собирает сайт AR-фото: вписывает сегодняшнюю дату в табличку и собирает standee.glb в повышенном качестве (2K).
 
 Запуск:  python build_date.py                 -> папка _site с index.html и standee.glb
          DATE=2026-12-31 python build_date.py  -> собрать на конкретную дату (для проверки)
 """
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 import shutil
+import struct
 from zoneinfo import ZoneInfo
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-import trimesh
-from trimesh.visual import TextureVisuals
-from trimesh.visual.material import PBRMaterial
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from scipy import ndimage
 
 TZ = ZoneInfo('Asia/Yekaterinburg')      # дата меняется в полночь по Екатеринбургу
 GAP = 0.004                              # половина толщины «картона», м
@@ -24,6 +24,10 @@ OUT = os.path.join(ROOT, '_site')
 RESAMPLE_BICUBIC = getattr(Image, 'Resampling', Image).BICUBIC
 RESAMPLE_LANCZOS = getattr(Image, 'Resampling', Image).LANCZOS
 TRANSFORM_PERSPECTIVE = getattr(Image, 'Transform', Image).PERSPECTIVE
+
+# Коэффициент повышения разрешения текстур модели (1.5x -> ~2760px по высоте для максимальной чёткости лица и таблички)
+UPSCALE = 1.5
+MAX_FIG_HEIGHT = 2400
 
 # Девушки календаря. Новая девушка = папка в assets (front.png, back.png, sign.json) + строка здесь.
 #   assets — папка с картинками, out — папка на сайте ('' = главная страница),
@@ -60,10 +64,11 @@ def fit(draw, text, bold, max_w, size):
     return font(bold, size)
 
 
-def sign_card(d, W=600, H=830):
-    """Макет таблички: белый лист, тёмный текст, оранжевый акцент."""
+def sign_card(d, W=1200, H=1660):
+    """Макет таблички в 2x разрешении (1200x1660): белый лист, тёмный текст, оранжевый акцент."""
+    k = W / 600.0
     im = Image.new('RGB', (W, H), 'white'); g = ImageDraw.Draw(im)
-    pad = 46; mw = W - 2 * pad
+    pad = round(46 * k); mw = W - 2 * pad
 
     def center(text, f, y, fill, spacing=0):
         if spacing:
@@ -74,25 +79,26 @@ def sign_card(d, W=600, H=830):
         else:
             g.text(((W - g.textlength(text, font=f)) / 2, y), text, font=f, fill=fill)
 
-    f_top = font(True, 40)
-    center('СЕГОДНЯ', f_top, 52, GREY, spacing=10)
-    g.rectangle([W / 2 - 60, 116, W / 2 + 60, 124], fill=ORANGE)
+    f_top = font(True, round(40 * k))
+    center('СЕГОДНЯ', f_top, round(52 * k), GREY, spacing=round(10 * k))
+    g.rectangle([W / 2 - round(60 * k), round(116 * k), W / 2 + round(60 * k), round(124 * k)], fill=ORANGE)
 
     day = str(d.day)
-    f_day = fit(g, day, True, mw, 360)
+    f_day = fit(g, day, True, mw, round(360 * k))
     bb = g.textbbox((0, 0), day, font=f_day)
-    g.text(((W - (bb[2] - bb[0])) / 2 - bb[0], 150 - bb[1]), day, font=f_day, fill=INK)
-    y = 150 + (bb[3] - bb[1]) + 40
+    g.text(((W - (bb[2] - bb[0])) / 2 - bb[0], round(150 * k) - bb[1]), day, font=f_day, fill=INK)
+    y = round(150 * k) + (bb[3] - bb[1]) + round(40 * k)
 
     month = MONTHS[d.month - 1].upper()
-    f_m = fit(g, month, True, mw, 92)
-    center(month, f_m, y, ORANGE); y += f_m.size + 34
+    f_m = fit(g, month, True, mw, round(92 * k))
+    center(month, f_m, y, ORANGE); y += f_m.size + round(34 * k)
 
-    g.line([pad + 40, y, W - pad - 40, y], fill=(205, 205, 208), width=4); y += 30
+    g.line([pad + round(40 * k), y, W - pad - round(40 * k), y], fill=(205, 205, 208), width=round(4 * k))
+    y += round(30 * k)
     wd = WEEKDAYS[d.weekday()]
-    f_w = fit(g, wd, False, mw, 66)
-    center(wd, f_w, y, INK); y += f_w.size + 22
-    center(str(d.year), font(False, 40), y, GREY)
+    f_w = fit(g, wd, False, mw, round(66 * k))
+    center(wd, f_w, y, INK); y += f_w.size + round(22 * k)
+    center(str(d.year), font(False, round(40 * k)), y, GREY)
     return im
 
 
@@ -105,46 +111,259 @@ def perspective_coeffs(dst, src):
     return np.linalg.solve(np.array(M, float), np.array(B, float)).tolist()
 
 
-def front_with_date(d, meta, folder=A):
+def enhance_and_decontaminate(im, scale=UPSCALE):
+    """Повышает детализацию текстуры (Lanczos + UnsharpMask) и очищает полупрозрачные края от белого ореола."""
+    if scale and abs(scale - 1.0) > 1e-3:
+        nw, nh = round(im.width * scale), round(im.height * scale)
+        rgb_im = im.convert('RGB').resize((nw, nh), RESAMPLE_LANCZOS)
+        rgb_im = rgb_im.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=3))
+        alpha_im = im.split()[3].resize((nw, nh), RESAMPLE_LANCZOS)
+    else:
+        rgb_im = im.convert('RGB').filter(ImageFilter.UnsharpMask(radius=1.0, percent=45, threshold=3))
+        alpha_im = im.split()[3]
+
+    c = np.array(rgb_im, dtype=np.uint8)
+    a = np.array(alpha_im, dtype=np.uint8)
+    # Заполняем внешние и полупрозрачные краевые пиксели цветом ближайшего плотного пикселя внутри фигуры (убирает светлую кайму)
+    core = a > 210
+    if np.any(core) and not np.all(core):
+        _, (iy, ix) = ndimage.distance_transform_edt(~core, return_indices=True)
+        edge_zone = ~core
+        c[edge_zone] = c[iy[edge_zone], ix[edge_zone]]
+    return Image.fromarray(np.dstack([c, a]), 'RGBA')
+
+
+def front_with_date(d, meta, folder=A, scale=UPSCALE):
     with Image.open(os.path.join(folder, 'front.png')) as raw_front:
-        front = raw_front.convert('RGBA')
-    card = sign_card(d)
-    q = meta['front_sign_inner']
+        front = enhance_and_decontaminate(raw_front.convert('RGBA'), scale=scale)
+    card = sign_card(d, W=1200, H=1660)
+    q = [(x * scale, y * scale) for x, y in meta['front_sign_inner']]
     src = [(0, 0), (card.width, 0), (card.width, card.height), (0, card.height)]
     warped = card.transform(front.size, TRANSFORM_PERSPECTIVE, perspective_coeffs(q, src), RESAMPLE_BICUBIC, fillcolor='white')
-    mask = Image.new('L', front.size, 0); ImageDraw.Draw(mask).polygon([tuple(p) for p in q], fill=255)
+    # Суперсэмплинг маски таблички (2x) для гладких краёв рамки
+    mw, mh = front.width * 2, front.height * 2
+    mask_hi = Image.new('L', (mw, mh), 0)
+    ImageDraw.Draw(mask_hi).polygon([(x * 2, y * 2) for x, y in q], fill=255)
+    mask = mask_hi.resize(front.size, RESAMPLE_LANCZOS)
+
     rgb = np.array(front.convert('RGB')).astype(float)
-    ink = np.array(warped).astype(float) / 255
-    m = (np.array(mask) > 0)[..., None]
-    out = np.where(m, rgb * ink, rgb)        # «умножение»: свет и тень на листе сохраняются
-    res = Image.fromarray(out.clip(0, 255).astype('uint8')); res.putalpha(front.split()[3])
+    ink = np.array(warped).astype(float) / 255.0
+    m = (np.array(mask).astype(float) / 255.0)[..., None]
+    out = rgb * (1.0 - m) + (rgb * ink) * m   # мягкое смешивание по сглаженной границе таблички
+    res = Image.fromarray(out.clip(0, 255).astype('uint8'))
+    res.putalpha(front.split()[3])
     return res
 
 
-def silhouette_info(im):
+def silhouette_info(im, scale=UPSCALE):
     a = np.array(im)[:, :, 3] > 128
     ys, xs = np.nonzero(a)
-    top, bot = ys.min(), ys.max()
-    feet_x = np.nonzero(a[bot - 240:bot + 1])[1].mean()
-    return top, bot, feet_x
+    top, bot = int(ys.min()), int(ys.max())
+    band = max(1, round(240 * scale))
+    feet_x = float(np.nonzero(a[max(0, bot - band):bot + 1])[1].mean())
+    center_x = 0.5 * float(xs.min() + xs.max())
+    return top, bot, feet_x, center_x
 
 
-def quad(im, S, front):
-    w, h = im.size
-    top, bot, fx = silhouette_info(im)
-    x0 = -fx * S; x1 = (w - fx) * S
-    y0 = -(h - 1 - bot) * S; y1 = y0 + h * S
-    z = GAP if front else -GAP
-    if front:
-        v = [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]
-    else:   # вид сзади: левый край картинки — слева у зрителя за спиной фигуры
-        v = [[-x0, y0, z], [-x1, y0, z], [-x1, y1, z], [-x0, y1, z]]
-    f = [[0, 1, 2], [0, 2, 3]]
-    uv = [[0, 0], [1, 0], [1, 1], [0, 1]]
-    mat = PBRMaterial(baseColorTexture=im, metallicFactor=0.0, roughnessFactor=1.0,
-                      alphaMode='MASK', alphaCutoff=0.5, doubleSided=False,
-                      emissiveTexture=im.convert('RGB'), emissiveFactor=[0.22] * 3)
-    return trimesh.Trimesh(np.array(v, float), f, visual=TextureVisuals(uv=np.array(uv, float), material=mat), process=False)
+def export_standee_glb(front_im, back_im, height_m, out_path, target_center_3d=None):
+    """Собирает компактный высококачественный glTF 2.0 (.glb) с идеальным совпадением силуэтов спереди и сзади."""
+    ft, fb, ffx, fcx = silhouette_info(front_im)
+    bt, bb, _, bcx = silhouette_info(back_im)
+    S_f = height_m / (fb - ft)
+    S_b = height_m / (bb - bt)
+
+    # Центр переднего силуэта в 3D (по умолчанию относительно стоп ffx, либо синхронизированный с live.mp4)
+    if target_center_3d is None:
+        target_center_3d = (fcx - ffx) * S_f
+    f_origin_x = fcx - target_center_3d / S_f
+    # Для задней стороны (зеркальной по X: x_3d = -(x_px - b_origin_x) * S_b) совмещаем центр силуэта с передней стороной:
+    b_origin_x = bcx + target_center_3d / S_b
+
+    def quad_vecs(im, S, origin_x, bot, is_front):
+        w, h = im.size
+        x0 = -origin_x * S; x1 = (w - origin_x) * S
+        y0 = -(h - 1 - bot) * S; y1 = y0 + h * S
+        z = GAP if is_front else -GAP
+        if is_front:
+            v = [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]
+            n = [[0.0, 0.0, 1.0]] * 4
+        else:
+            v = [[-x0, y0, z], [-x1, y0, z], [-x1, y1, z], [-x0, y1, z]]
+            n = [[0.0, 0.0, -1.0]] * 4
+        return np.array(v, dtype=np.float32), np.array(n, dtype=np.float32)
+
+    def encode_png(im):
+        buf = io.BytesIO()
+        im.save(buf, format='PNG', optimize=True)
+        return buf.getvalue()
+
+    indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
+    uv = np.array([[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]], dtype=np.float32)
+    v_front, n_front = quad_vecs(front_im, S_f, f_origin_x, fb, True)
+    v_back, n_back = quad_vecs(back_im, S_b, b_origin_x, bb, False)
+    png_front = encode_png(front_im)
+    png_back = encode_png(back_im)
+
+    chunks = []
+    views = []
+
+    def add_view(raw_bytes, target=None):
+        offset = sum(len(c) for c in chunks)
+        length = len(raw_bytes)
+        pad = (4 - (length % 4)) % 4
+        chunks.append(raw_bytes + (b'\x00' * pad))
+        bv = {'buffer': 0, 'byteOffset': offset, 'byteLength': length}
+        if target is not None:
+            bv['target'] = target
+        views.append(bv)
+        return len(views) - 1
+
+    bv_idx = add_view(indices.tobytes(), 34963)
+    bv_uv = add_view(uv.tobytes(), 34962)
+    bv_vf = add_view(v_front.tobytes(), 34962)
+    bv_nf = add_view(n_front.tobytes(), 34962)
+    bv_vb = add_view(v_back.tobytes(), 34962)
+    bv_nb = add_view(n_back.tobytes(), 34962)
+    bv_img_f = add_view(png_front)
+    bv_img_b = add_view(png_back)
+
+    bin_blob = b''.join(chunks)
+
+    gltf = {
+        'asset': {'version': '2.0', 'generator': 'ar-foto-hq-builder'},
+        'scene': 0,
+        'scenes': [{'nodes': [0, 1]}],
+        'nodes': [
+            {'name': 'front', 'mesh': 0},
+            {'name': 'back', 'mesh': 1},
+        ],
+        'meshes': [
+            {
+                'name': 'front',
+                'primitives': [{
+                    'attributes': {'POSITION': 1, 'NORMAL': 2, 'TEXCOORD_0': 5},
+                    'indices': 0,
+                    'mode': 4,
+                    'material': 0,
+                }],
+            },
+            {
+                'name': 'back',
+                'primitives': [{
+                    'attributes': {'POSITION': 3, 'NORMAL': 4, 'TEXCOORD_0': 5},
+                    'indices': 0,
+                    'mode': 4,
+                    'material': 1,
+                }],
+            },
+        ],
+        'materials': [
+            {
+                'name': 'front_mat',
+                'pbrMetallicRoughness': {
+                    'baseColorTexture': {'index': 0},
+                    'metallicFactor': 0.0,
+                    'roughnessFactor': 1.0,
+                },
+                'emissiveTexture': {'index': 0},
+                'emissiveFactor': [0.22, 0.22, 0.22],
+                'alphaMode': 'MASK',
+                'alphaCutoff': 0.4,
+                'doubleSided': False,
+            },
+            {
+                'name': 'back_mat',
+                'pbrMetallicRoughness': {
+                    'baseColorTexture': {'index': 1},
+                    'metallicFactor': 0.0,
+                    'roughnessFactor': 1.0,
+                },
+                'emissiveTexture': {'index': 1},
+                'emissiveFactor': [0.22, 0.22, 0.22],
+                'alphaMode': 'MASK',
+                'alphaCutoff': 0.4,
+                'doubleSided': False,
+            },
+        ],
+        'samplers': [{
+            'magFilter': 9729,   # LINEAR
+            'minFilter': 9987,   # LINEAR_MIPMAP_LINEAR
+            'wrapS': 33071,      # CLAMP_TO_EDGE
+            'wrapT': 33071,      # CLAMP_TO_EDGE
+        }],
+        'textures': [
+            {'sampler': 0, 'source': 0},
+            {'sampler': 0, 'source': 1},
+        ],
+        'images': [
+            {'bufferView': bv_img_f, 'mimeType': 'image/png'},
+            {'bufferView': bv_img_b, 'mimeType': 'image/png'},
+        ],
+        'accessors': [
+            {
+                'bufferView': bv_idx,
+                'componentType': 5125,
+                'count': 6,
+                'type': 'SCALAR',
+                'min': [0],
+                'max': [3],
+            },
+            {
+                'bufferView': bv_vf,
+                'componentType': 5126,
+                'count': 4,
+                'type': 'VEC3',
+                'min': v_front.min(axis=0).tolist(),
+                'max': v_front.max(axis=0).tolist(),
+            },
+            {
+                'bufferView': bv_nf,
+                'componentType': 5126,
+                'count': 4,
+                'type': 'VEC3',
+                'min': [0.0, 0.0, 1.0],
+                'max': [0.0, 0.0, 1.0],
+            },
+            {
+                'bufferView': bv_vb,
+                'componentType': 5126,
+                'count': 4,
+                'type': 'VEC3',
+                'min': v_back.min(axis=0).tolist(),
+                'max': v_back.max(axis=0).tolist(),
+            },
+            {
+                'bufferView': bv_nb,
+                'componentType': 5126,
+                'count': 4,
+                'type': 'VEC3',
+                'min': [0.0, 0.0, -1.0],
+                'max': [0.0, 0.0, -1.0],
+            },
+            {
+                'bufferView': bv_uv,
+                'componentType': 5126,
+                'count': 4,
+                'type': 'VEC2',
+                'min': [0.0, 0.0],
+                'max': [1.0, 1.0],
+            },
+        ],
+        'bufferViews': views,
+        'buffers': [{'byteLength': len(bin_blob)}],
+    }
+
+    json_bytes = json.dumps(gltf, separators=(',', ':')).encode('utf-8')
+    json_pad = (4 - (len(json_bytes) % 4)) % 4
+    json_chunk = json_bytes + (b' ' * json_pad)
+
+    total_len = 12 + 8 + len(json_chunk) + 8 + len(bin_blob)
+    with open(out_path, 'wb') as fh:
+        fh.write(struct.pack('<4sII', b'glTF', 2, total_len))
+        fh.write(struct.pack('<I4s', len(json_chunk), b'JSON'))
+        fh.write(json_chunk)
+        fh.write(struct.pack('<I4s', len(bin_blob), b'BIN\x00'))
+        fh.write(bin_blob)
 
 
 def file_md5_tag(path):
@@ -155,63 +374,77 @@ def file_md5_tag(path):
 def build_figure(d, cfg):
     folder = os.path.join(ROOT, cfg['assets'])
     out = os.path.join(OUT, cfg['out'])
+    root_target = os.path.join(ROOT, cfg['out']) if cfg['out'] else ROOT
     with open(os.path.join(folder, 'sign.json'), encoding='utf-8') as fh:
         meta = json.load(fh)
-    front = front_with_date(d, meta, folder)
+    front = front_with_date(d, meta, folder, scale=UPSCALE)
     with Image.open(os.path.join(folder, 'back.png')) as raw_back:
-        back = raw_back.convert('RGBA')
-    t, b, _ = silhouette_info(front)
+        back = enhance_and_decontaminate(raw_back.convert('RGBA'), scale=UPSCALE)
+    t, b, _, _ = silhouette_info(front, scale=UPSCALE)
     S = cfg['height'] / (b - t)
-    sc = trimesh.Scene()
-    sc.add_geometry(quad(front, S, True), node_name='front', geom_name='front')
-    sc.add_geometry(quad(back, S, False), node_name='back', geom_name='back')
+
+    # Если есть живое видео (балерина), синхронизируем 3D-центр мешей standee.glb с силуэтом в live.mp4
+    target_center_3d = None
+    if cfg.get('live') and os.path.exists(os.path.join(folder, 'live.json')):
+        with open(os.path.join(folder, 'live.json'), encoding='utf-8') as fh:
+            lm_align = json.load(fh)
+        S_live = lm_align['heightM'] / (lm_align['bottom'] - lm_align['top'])
+        # В первом кадре live.mp4 силуэт балерины центрируется вокруг +0.0468 м относительно feetX
+        target_center_3d = 0.0468
+
     os.makedirs(out, exist_ok=True)
+    os.makedirs(root_target, exist_ok=True)
     glb_path = os.path.join(out, 'standee.glb')
-    sc.export(glb_path)
-    # картинки для режима «Фото с фигурой» (камера телефона + фигура поверх)
+    export_standee_glb(front, back, cfg['height'], glb_path, target_center_3d=target_center_3d)
+    shutil.copy2(glb_path, os.path.join(root_target, 'standee.glb'))
+
+    # картинки для режима «Фото с фигурой» (камера телефона + фигура поверх) в повышенном разрешении
     for im, name in [(front, 'figure.png'), (back, 'figure-back.png')]:
         cropped = im.crop(im.getbbox())
-        if cropped.height > 1600:
-            cropped = cropped.resize((round(cropped.width * 1600 / cropped.height), 1600), RESAMPLE_LANCZOS)
+        if cropped.height > MAX_FIG_HEIGHT:
+            cropped = cropped.resize((round(cropped.width * MAX_FIG_HEIGHT / cropped.height), MAX_FIG_HEIGHT), RESAMPLE_LANCZOS)
         out_img = os.path.join(out, name)
         cropped.save(out_img, optimize=True)
-        if not cfg['out']:
-            shutil.copy2(out_img, os.path.join(ROOT, name))
-    if not cfg['out']:
-        shutil.copy2(glb_path, os.path.join(ROOT, 'standee.glb'))
+        shutil.copy2(out_img, os.path.join(root_target, name))
 
     with open(os.path.join(ROOT, 'index.html'), encoding='utf-8') as fh:
         page = fh.read()
     if cfg.get('live') and os.path.exists(os.path.join(folder, 'live.mp4')):   # «живое фото»
         live_mp4_src = os.path.join(folder, 'live.mp4')
-        shutil.copy(live_mp4_src, os.path.join(out, 'live.mp4'))
+        shutil.copy2(live_mp4_src, os.path.join(out, 'live.mp4'))
+        if os.path.abspath(root_target) != os.path.abspath(folder):
+            shutil.copy2(live_mp4_src, os.path.join(root_target, 'live.mp4'))
         with open(os.path.join(folder, 'live.json'), encoding='utf-8') as fh:
             lm = json.load(fh)
         lm['v'] = file_md5_tag(live_mp4_src)      # телефон не возьмёт старое видео из кэша
-        with open(os.path.join(out, 'live.json'), 'w', encoding='utf-8') as fh:
-            json.dump(lm, fh, separators=(',', ':'))
+        for dst_dir in [out, root_target]:
+            with open(os.path.join(dst_dir, 'live.json'), 'w', encoding='utf-8') as fh:
+                json.dump(lm, fh, separators=(',', ':'))
         try:
             build_live_usdz(d, folder, out, back, S)
             usdz_tag = file_md5_tag(os.path.join(out, 'live.usdz'))
+            if os.path.exists(os.path.join(out, 'live.usdz')):
+                shutil.copy2(os.path.join(out, 'live.usdz'), os.path.join(root_target, 'live.usdz'))
             # AR от Apple на iPhone открывает живую модель вместо статичной; адрес новый при каждом изменении модели
             page = page.replace('ar ar-modes="quick-look"', f'ios-src="live.usdz?v={usdz_tag}" ar ar-modes="quick-look"', 1)
         except Exception as e:   # без модели для iPhone страница всё равно работает (статичная фигура)
             print('   live.usdz пропущен:', e)
     with open(os.path.join(out, 'index.html'), 'w', encoding='utf-8') as fh:
         fh.write(page)
-    print('  ', cfg['out'] or '(главная)', '->', out)
+    if cfg['out']:
+        with open(os.path.join(root_target, 'index.html'), 'w', encoding='utf-8') as fh:
+            fh.write(page)
+    print('  ', cfg['out'] or '(главная)', '->', out, f'({front.size[0]}x{front.size[1]})')
 
 
-def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
-    """Живая фигура для AR от Apple (iPhone): кадры видео — плоскости, которые показываются по очереди.
-    Apple не проигрывает видео внутри модели, но проигрывает анимацию — получается «мультфильм» по кругу."""
+def build_live_usdz(d, folder, out, back, S_static, fps=16, scale=None):
+    """Живая фигура для AR от Apple (iPhone): кадры видео в высоком разрешении без зернистого дизеринга."""
     import subprocess, tempfile
-    from scipy import ndimage
     from pxr import Usd, UsdGeom, UsdShade, UsdUtils, Sdf, Gf, Vt
     with open(os.path.join(folder, 'live.json'), encoding='utf-8') as fh:
         meta = json.load(fh)
-    if scale is None:   # текстура ~640 px по высоте, сколько бы ни занимала фигура в кадре видео
-        scale = min(1.0, 640 / meta['h'])
+    if scale is None:
+        scale = min(1.0, 960 / meta['h'])
     step = max(1, round(meta['fps'] / fps))
     W, H = meta['w'], meta['h']
     tw, th = int(W * scale) // 2 * 2, int(H * scale) // 2 * 2
@@ -225,7 +458,7 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         vframes = [f for i, f in enumerate(vframes) if i * step < pp]
     n = len(vframes)
     seq = list(range(n)) + (list(range(n - 2, 0, -1)) if pp else [])   # порядок показа кадров
-    card = sign_card(d)
+    card = sign_card(d, W=1200, H=1660)
     src = [(0, 0), (card.width, 0), (card.width, card.height), (0, card.height)]
     tex = os.path.join(tmp, 'tex'); os.makedirs(tex)
     TEXW, TEXH = 512, 1024
@@ -239,14 +472,12 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         mask = Image.new('L', col.size, 0); ImageDraw.Draw(mask).polygon(q, fill=255)
         c = np.array(col).astype(float); ink = np.array(warped).astype(float) / 255
         c = np.where((np.array(mask) > 0)[..., None], c * ink, c)
-        # одна картинка на кадр: цвет + прозрачность вместе (с отдельными картинками iPhone сдвигал прозрачность)
         an = np.array(al)
         inside = an > 127
         c = c.clip(0, 255).astype('uint8')
         _, (iy, ix) = ndimage.distance_transform_edt(~inside, return_indices=True)
         c = c[iy, ix]                                   # снаружи — цвет ближайшего края фигуры, без тёмной каймы
         rgba = Image.fromarray(np.dstack([c, np.where(inside, 255, 0).astype('uint8')]), 'RGBA')
-        # размер картинки — степень двойки (512×1024): iPhone обрезал картинки с «неровной» шириной справа
         fit_k = min(TEXW / rgba.width, TEXH / rgba.height)
         rgba = rgba.resize((round(rgba.width * fit_k), round(rgba.height * fit_k)), RESAMPLE_LANCZOS)
         a2 = np.array(rgba)[:, :, 3]; rgba.putalpha(Image.fromarray(np.where(a2 > 127, 255, 0).astype('uint8')))
@@ -256,15 +487,12 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         _, (jy, jx) = ndimage.distance_transform_edt(~inside2, return_indices=True)
         cv[:, :, :3] = cv[:, :, :3][jy, jx]          # поля тоже залиты цветом края (прозрачные)
         rgba = Image.fromarray(cv, 'RGBA'); img_w, img_h = round(tw * fit_k), round(th * fit_k)
-        rgba.quantize(256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.FLOYDSTEINBERG) \
-            .save(os.path.join(tex, f'f{i:03d}.png'), optimize=True)
+        rgba.save(os.path.join(tex, f'f{i:03d}.png'), optimize=True)
 
     def make(variant):
         usda = os.path.join(tmp, f'{variant}.usdc')
         st = Usd.Stage.CreateNew(usda)
         UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.y); UsdGeom.SetStageMetersPerUnit(st, 1.0)
-        # Apple сглаживает анимацию между ключами — поэтому шкала времени мелкая (240 делений в секунду),
-        # а кадр включается и выключается за одно деление (~4 мс): плавных «переходов» между кадрами нет.
         TPS = 240; span = TPS // fps; end = len(seq) * span
         if variant != 'test-static':
             st.SetStartTimeCode(0); st.SetEndTimeCode(end); st.SetTimeCodesPerSecond(TPS); st.SetFramesPerSecond(TPS)
@@ -284,12 +512,12 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
                 t.CreateInput('st', Sdf.ValueTypeNames.Float2).ConnectToSource(rd.ConnectableAPI(), 'result')
                 t.CreateInput('wrapS', Sdf.ValueTypeNames.Token).Set('clamp'); t.CreateInput('wrapT', Sdf.ValueTypeNames.Token).Set('clamp')
                 return t
-            tc = texture('img', image_file)                 # цвет и прозрачность из одной картинки
+            tc = texture('img', image_file)
             tc.CreateInput('sourceColorSpace', Sdf.ValueTypeNames.Token).Set('sRGB')
             tc.CreateOutput('rgb', Sdf.ValueTypeNames.Float3); tc.CreateOutput('a', Sdf.ValueTypeNames.Float)
             sh.CreateInput('diffuseColor', Sdf.ValueTypeNames.Color3f).ConnectToSource(tc.ConnectableAPI(), 'rgb')
             sh.CreateInput('opacity', Sdf.ValueTypeNames.Float).ConnectToSource(tc.ConnectableAPI(), 'a')
-            sh.CreateInput('opacityThreshold', Sdf.ValueTypeNames.Float).Set(0.5)   # чёткое вырезание по маске
+            sh.CreateInput('opacityThreshold', Sdf.ValueTypeNames.Float).Set(0.5)
             m.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), 'surface')
             return m
 
@@ -298,7 +526,6 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
             mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
             mesh.CreateFaceVertexCountsAttr([4]); mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
             mesh.CreateDoubleSidedAttr(False)
-            # без сглаживания: по умолчанию iPhone скругляет плоскость почти в овал и срезает углы (табличку)
             mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
             mesh.CreateNormalsAttr(Vt.Vec3fArray([Gf.Vec3f(0, 0, 1)] * 4)); mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
             mesh.CreateExtentAttr(UsdGeom.Mesh.ComputeExtent(mesh.GetPointsAttr().Get()))
@@ -306,11 +533,9 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
             pv.Set(Vt.Vec2fArray([Gf.Vec2f(0, 0), Gf.Vec2f(1, 0), Gf.Vec2f(1, 1), Gf.Vec2f(0, 1)]))
             UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
 
-        # перед: кадры видео (масштаб — как в проигрывателе на странице)
         S = meta['heightM'] / (meta['bottom'] - meta['top'])
         xl, xr = (0 - meta['feetX']) * S, (W - meta['feetX']) * S
         yt, yb = meta['bottom'] * S, (meta['bottom'] - H) * S
-        # картинка кадра занимает левый верхний угол текстуры 512×1024 — плоскость расширяем на поля
         xr = xl + (xr - xl) * TEXW / img_w
         yb = yt - (yt - yb) * TEXH / img_h
         cx, cy, z = (xl + xr) / 2, (yt + yb) / 2, 0.01
@@ -326,23 +551,22 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
             sop = x.AddScaleOp() if variant == 'live' else None
             one = Gf.Vec3f(1, 1, 1)
             keys = {}
-            for pos in [p for p, v in enumerate(seq) if v == i]:   # кадр виден на [a, b) — один или два раза за круг
+            for pos in [p for p, v in enumerate(seq) if v == i]:
                 a, b = pos * span, (pos + 1) * span
                 if a > 0: keys[a - 1] = tiny
                 keys[a] = one; keys[b - 1] = one
                 if b < end: keys[b] = tiny
             keys.setdefault(0, tiny)
             last = max(p for p, v in enumerate(seq) if v == i)
-            keys[end] = one if (last + 1) * span == end else tiny   # последний показанный кадр держится до конца круга
+            keys[end] = one if (last + 1) * span == end else tiny
             if variant == 'live':
                 for t in sorted(keys):
                     sop.Set(keys[t], t)
-            else:   # test-vis: кадры переключаются атрибутом видимости
+            else:
                 va = x.CreateVisibilityAttr()
                 for t in sorted(keys):
                     va.Set(UsdGeom.Tokens.inherited if keys[t] == one else UsdGeom.Tokens.invisible, t)
             plane(f'/Root/Live/F{i:03d}/Quad', pts, material(f'M{i:03d}', f'f{i:03d}.png'))
-        # задней стороны в живой модели нет: на iPhone она перекрывала переднюю (обрез таблички и руки, дрожание)
         st.GetRootLayer().Save()
         cwd = os.getcwd(); os.chdir(tmp)
         try:
