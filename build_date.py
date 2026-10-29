@@ -25,7 +25,7 @@ RESAMPLE_BICUBIC = getattr(Image, 'Resampling', Image).BICUBIC
 RESAMPLE_LANCZOS = getattr(Image, 'Resampling', Image).LANCZOS
 TRANSFORM_PERSPECTIVE = getattr(Image, 'Transform', Image).PERSPECTIVE
 
-# Коэффициент повышения разрешения текстур модели (1.5x -> ~2760px по высоте для максимальной чёткости лица и таблички)
+# Коэффициент повышения разрешения текстур модели (1.5x -> ~2560..2760px по высоте для максимальной чёткости лица и таблички)
 UPSCALE = 1.5
 MAX_FIG_HEIGHT = 2400
 
@@ -36,7 +36,7 @@ MAX_FIG_HEIGHT = 2400
 FIGURES = [
     {'assets': 'assets',            'out': '',           'height': 1.70},
     {'assets': 'assets/balerina',   'out': 'balerina',   'height': 1.98, 'live': True},   # рука поднята, на пуантах; живое видео
-    {'assets': 'assets/skripachka', 'out': 'skripachka', 'height': 1.74, 'live': True},   # скрипачка с табличкой; живое видео
+    {'assets': 'assets/skripachka', 'out': 'skripachka', 'height': 1.74, 'live': True},   # скрипачка с табличкой; живое видео 2K
 ]
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля',
@@ -446,13 +446,14 @@ def build_figure(d, cfg):
 def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
     """Живая фигура для AR от Apple (iPhone):
     - fps=12 кратна и 24fps исходного видео (step=2), и экранам iPhone 60Hz (5x) / 120Hz ProMotion (10x);
+    - повышенное разрешение текстур (768x1152 вместо 512x1024) даёт 2x чёткость лица и платья в AR Quick Look;
     - TPS=2400 (0.4 мс на тик) и перекрытие ключей [a, b] на 1 тик полностью исключают мерцание/провал масштаба между кадрами."""
     import subprocess, tempfile
     from pxr import Usd, UsdGeom, UsdShade, UsdUtils, Sdf, Gf, Vt
     with open(os.path.join(folder, 'live.json'), encoding='utf-8') as fh:
         meta = json.load(fh)
     if scale is None:
-        scale = min(1.0, 720 / meta['h'])
+        scale = min(1.0, 1080 / meta['h'])
     step = max(1, round(meta['fps'] / fps))
     W, H = meta['w'], meta['h']
     tw, th = int(W * scale) // 2 * 2, int(H * scale) // 2 * 2
@@ -469,7 +470,7 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
     card = sign_card(d, W=1200, H=1660)
     src = [(0, 0), (card.width, 0), (card.width, card.height), (0, card.height)]
     tex = os.path.join(tmp, 'tex'); os.makedirs(tex)
-    TEXW, TEXH = 512, 1024
+    TEXW, TEXH = 768, 1152
     k = tw / W
     for i, name in enumerate(vframes):
         with Image.open(os.path.join(tmp, name)) as raw_vf:
@@ -492,10 +493,10 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         canvas = Image.new('RGBA', (TEXW, TEXH), (0, 0, 0, 0))
         canvas.paste(rgba, (0, 0))
         cv = np.array(canvas); inside2 = cv[:, :, 3] > 0
-        _, (jy, jx) = ndimage.distance_transform_edt(~inside2, return_indices=True)
-        cv[:, :, :3] = cv[:, :, :3][jy, jx]          # поля тоже залиты цветом края (прозрачные)
+        dist_out, (jy, jx) = ndimage.distance_transform_edt(~inside2, return_indices=True)
+        # Заливаем цветом края только 3-пиксельную кайму вокруг силуэта (для линейной фильтрации GPU), а дальний фон обнуляем
+        cv[:, :, :3] = np.where((dist_out <= 3)[..., None], cv[:, :, :3][jy, jx], 0)
         rgba = Image.fromarray(cv, 'RGBA'); img_w, img_h = round(tw * fit_k), round(th * fit_k)
-        # Палитровое сжатие БЕЗ дизеринга (dither=NONE): лёгкие текстуры для памяти iPhone и чистые цвета без сетки точек
         rgba.quantize(256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE) \
             .save(os.path.join(tex, f'f{i:03d}.png'), optimize=True)
 
