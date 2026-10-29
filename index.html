@@ -698,7 +698,7 @@ loadAll().catch(() => {});
 
 /* ---------- «живое фото»: видео спереди (слева цвет, справа прозрачность) + дата на табличке ---------- */
 let live = null;
-const liveJsonUrl = new URL('live.json', location.href).href;
+const liveJsonUrl = new URL('live.json?d=' + (info.dateTag || '1'), location.href).href;
 const liveMeta = fetch(liveJsonUrl, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 
 async function setupLive() {
@@ -725,8 +725,9 @@ async function setupLive() {
   aTex.minFilter = THREE.LinearFilter; aTex.magFilter = THREE.LinearFilter; aTex.generateMipmaps = false;
 
   const compose = () => {
-    colorCtx.drawImage(v, 0, 0, W, H, 0, 0, W, H);
-    alphaCtx.drawImage(v, W, 0, W, H, 0, 0, W, H);
+    const vw = (v.videoWidth >> 1) || W, vh = v.videoHeight || H;
+    colorCtx.drawImage(v, 0, 0, vw, vh, 0, 0, W, H);
+    alphaCtx.drawImage(v, vw, 0, vw, vh, 0, 0, W, H);
     tex.needsUpdate = true;
     aTex.needsUpdate = true;
   };
@@ -738,7 +739,7 @@ async function setupLive() {
   });
   const S = meta.heightM / (meta.bottom - meta.top);   // метров на пиксель
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(meta.w * S, meta.h * S), mat);
-  plane.position.set((meta.w / 2 - meta.feetX) * S, (meta.bottom - meta.h / 2) * S, 0.006);
+  plane.position.set((meta.w / 2 - meta.feetX) * S, (meta.bottom - meta.h / 2) * S, 0.0015);
   plane.renderOrder = 1;
 
   /* Табличка с датой: вынесена на z = 0.0085 (2.5 мм впереди плоскости видео z = 0.006), чтобы на iPhone не было Z-fighting мерцания */
@@ -754,7 +755,9 @@ async function setupLive() {
   dGeo.setIndex([0, 3, 1, 1, 3, 2]);
   const dMesh = new THREE.Mesh(dGeo, new THREE.MeshBasicMaterial({
     map: dTex,
-    color: 0xf0f0f2,
+    color: 0xffffff,
+    transparent: true,
+    blending: THREE.MultiplyBlending,
     polygonOffset: true,
     polygonOffsetFactor: -2,
     polygonOffsetUnits: -2
@@ -779,7 +782,7 @@ function updateLive(force) {   // синхронно обновлять текс
   }
   live.last = f;
   const q = m.sign[f], S = live.S, pos = live.dGeo.attributes.position;
-  for (let i = 0; i < 4; i++) pos.setXYZ(i, (q[i][0] - m.feetX) * S, (m.bottom - q[i][1]) * S, 0.0085);
+  for (let i = 0; i < 4; i++) pos.setXYZ(i, (q[i][0] - m.feetX) * S, (m.bottom - q[i][1]) * S, 0.003);
   pos.needsUpdate = true; live.dGeo.computeBoundingSphere();
 }
 function playLive() { if (live) live.video.play().catch(() => {}); }

@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from scipy import ndimage
 
 TZ = ZoneInfo('Asia/Yekaterinburg')      # дата меняется в полночь по Екатеринбургу
-GAP = 0.006                              # половина толщины «картона», м (12 мм между передом и спиной против Z-fighting на iPhone)
+GAP = 0.0015                             # минимальный зазор (1.5 мм) между передом и спиной, чтобы задник не выглядывал сбоку
 ROOT = os.path.dirname(os.path.abspath(__file__))
 A = os.path.join(ROOT, 'assets')         # здесь же лежат шрифты
 OUT = os.path.join(ROOT, '_site')
@@ -173,16 +173,18 @@ def silhouette_info(im, scale=UPSCALE):
 def export_standee_glb(front_im, back_im, height_m, out_path, target_center_3d=None):
     """Собирает компактный высококачественный glTF 2.0 (.glb) с идеальным совпадением силуэтов спереди и сзади."""
     ft, fb, ffx, fcx = silhouette_info(front_im)
-    bt, bb, _, bcx = silhouette_info(back_im)
     S_f = height_m / (fb - ft)
-    S_b = height_m / (bb - bt)
-
-    # Центр переднего силуэта в 3D (по умолчанию относительно стоп ffx, либо синхронизированный с live.mp4)
     if target_center_3d is None:
         target_center_3d = (fcx - ffx) * S_f
     f_origin_x = fcx - target_center_3d / S_f
-    # Для задней стороны (зеркальной по X: x_3d = -(x_px - b_origin_x) * S_b) совмещаем центр силуэта с передней стороной:
-    b_origin_x = bcx + target_center_3d / S_b
+    if back_im.size == front_im.size:
+        S_b = S_f
+        bb = fb
+        b_origin_x = front_im.width - f_origin_x
+    else:
+        bt, bb, _, bcx = silhouette_info(back_im)
+        S_b = height_m / (bb - bt)
+        b_origin_x = bcx + target_center_3d / S_b
 
     def quad_vecs(im, S, origin_x, bot, is_front):
         w, h = im.size
@@ -387,6 +389,16 @@ def build_figure(d, cfg):
     front = front_with_date(d, meta, folder, scale=UPSCALE)
     with Image.open(os.path.join(folder, 'back.png')) as raw_back:
         back = enhance_and_decontaminate(raw_back.convert('RGBA'), scale=UPSCALE)
+    if back.size == front.size:
+        f_a = np.array(front)[:, :, 3]
+        b_arr = np.array(back)
+        b_a_clamped = np.minimum(b_arr[:, :, 3], ndimage.grey_erosion(np.fliplr(f_a), size=(3, 3)))
+        core_b = b_a_clamped > 210
+        if np.any(core_b) and not np.all(core_b):
+            _, (biy, bix) = ndimage.distance_transform_edt(~core_b, return_indices=True)
+            b_arr[:, :, :3][~core_b] = b_arr[:, :, :3][biy[~core_b], bix[~core_b]]
+        b_arr[:, :, 3] = b_a_clamped
+        back = Image.fromarray(b_arr, 'RGBA')
     t, b, _, _ = silhouette_info(front, scale=UPSCALE)
     S = cfg['height'] / (b - t)
 
@@ -500,9 +512,9 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         canvas = Image.new('RGBA', (TEXW, TEXH), (0, 0, 0, 0))
         canvas.paste(rgba, (0, 0))
         cv = np.array(canvas); inside2 = cv[:, :, 3] > 0
-        dist_out, (jy, jx) = ndimage.distance_transform_edt(~inside2, return_indices=True)
-        # Заливаем цветом края только 3-пиксельную кайму вокруг силуэта (для линейной фильтрации GPU), а дальний фон обнуляем
-        cv[:, :, :3] = np.where((dist_out <= 3)[..., None], cv[:, :, :3][jy, jx], 0)
+        _, (jy, jx) = ndimage.distance_transform_edt(~inside2, return_indices=True)
+        # Заполняем все прозрачные пиксели цветом ближайшего края фигуры (edge color bleed без чёрного фона)
+        cv[:, :, :3] = cv[:, :, :3][jy, jx]
         rgba = Image.fromarray(cv, 'RGBA'); img_w, img_h = round(tw * fit_k), round(th * fit_k)
         rgba.quantize(256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE) \
             .save(os.path.join(tex, f'f{i:03d}.png'), optimize=True)
