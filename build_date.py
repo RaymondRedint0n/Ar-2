@@ -25,18 +25,19 @@ RESAMPLE_BICUBIC = getattr(Image, 'Resampling', Image).BICUBIC
 RESAMPLE_LANCZOS = getattr(Image, 'Resampling', Image).LANCZOS
 TRANSFORM_PERSPECTIVE = getattr(Image, 'Transform', Image).PERSPECTIVE
 
-# Коэффициент повышения разрешения текстур модели (1.5x -> ~2560..2760px по высоте для максимальной чёткости лица и таблички)
+# Коэффициент повышения разрешения текстур модели (1.5x -> ~2560..2880px по высоте для максимальной чёткости лица и таблички)
 UPSCALE = 1.5
 MAX_FIG_HEIGHT = 2400
 
 # Девушки календаря. Новая девушка = папка в assets (front.png, back.png, sign.json) + строка здесь.
 #   assets — папка с картинками, out — папка на сайте ('' = главная страница),
-#   height — высота силуэта от верхней точки (макушка или поднятая рука) до подошвы, м
+#   height — высота силуэта от верхней точки (макушка или поднятая рука/мольберт) до подошвы, м
 #   live — True, если в папке есть «живое» видео (live.mp4 + live.json)
 FIGURES = [
     {'assets': 'assets',            'out': '',           'height': 1.70},
     {'assets': 'assets/balerina',   'out': 'balerina',   'height': 1.98, 'live': True},   # рука поднята, на пуантах; живое видео
     {'assets': 'assets/skripachka', 'out': 'skripachka', 'height': 1.74, 'live': True},   # скрипачка с табличкой; живое видео 2K
+    {'assets': 'assets/xydochnica', 'out': 'xydochnica', 'height': 1.76, 'live': True},   # художница у мольберта; живое видео 2K
 ]
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля',
@@ -149,7 +150,10 @@ def front_with_date(d, meta, folder=A, scale=UPSCALE):
 
     rgb = np.array(front.convert('RGB')).astype(float)
     ink = np.array(warped).astype(float) / 255.0
-    m = (np.array(mask).astype(float) / 255.0)[..., None]
+    # Вписываем дату только по белой бумаге холста/таблички, чтобы рука, кисть или палитра поверх холста оставались нетронутыми
+    is_paper = ((rgb.min(axis=2) > 165) & ((rgb.max(axis=2) - rgb.min(axis=2)) < 30)).astype(float)
+    paper_w = ndimage.gaussian_filter(is_paper, sigma=0.8)[..., None]
+    m = (np.array(mask).astype(float) / 255.0)[..., None] * paper_w
     out = rgb * (1.0 - m) + (rgb * ink) * m   # мягкое смешивание по сглаженной границе таблички
     res = Image.fromarray(out.clip(0, 255).astype('uint8'))
     res.putalpha(front.split()[3])
@@ -480,7 +484,10 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         warped = card.transform(col.size, TRANSFORM_PERSPECTIVE, perspective_coeffs(q, src), RESAMPLE_BICUBIC, fillcolor='white')
         mask = Image.new('L', col.size, 0); ImageDraw.Draw(mask).polygon(q, fill=255)
         c = np.array(col).astype(float); ink = np.array(warped).astype(float) / 255
-        c = np.where((np.array(mask) > 0)[..., None], c * ink, c)
+        # Вписываем дату только по белой бумаге холста/таблички, чтобы рука, кисть или палитра поверх холста оставались нетронутыми
+        is_paper = ((c.min(axis=2) > 165) & ((c.max(axis=2) - c.min(axis=2)) < 30)).astype(float)
+        m_paper = (ndimage.gaussian_filter(is_paper, sigma=0.8) * (np.array(mask) > 0).astype(float))[..., None]
+        c = c * (1.0 - m_paper) + (c * ink) * m_paper
         an = np.array(al)
         inside = an > 127
         c = c.clip(0, 255).astype('uint8')
