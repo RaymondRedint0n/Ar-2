@@ -34,8 +34,9 @@ MAX_FIG_HEIGHT = 2400
 #   height — высота силуэта от верхней точки (макушка или поднятая рука) до подошвы, м
 #   live — True, если в папке есть «живое» видео (live.mp4 + live.json)
 FIGURES = [
-    {'assets': 'assets',          'out': '',         'height': 1.70},
-    {'assets': 'assets/balerina', 'out': 'balerina', 'height': 1.98, 'live': True},   # рука поднята, на пуантах; живое видео
+    {'assets': 'assets',            'out': '',           'height': 1.70},
+    {'assets': 'assets/balerina',   'out': 'balerina',   'height': 1.98, 'live': True},   # рука поднята, на пуантах; живое видео
+    {'assets': 'assets/skripachka', 'out': 'skripachka', 'height': 1.74, 'live': True},   # скрипачка с табличкой; живое видео
 ]
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля',
@@ -373,6 +374,8 @@ def file_md5_tag(path):
 
 def build_figure(d, cfg):
     folder = os.path.join(ROOT, cfg['assets'])
+    if not os.path.exists(os.path.join(folder, 'front.png')):
+        return
     out = os.path.join(OUT, cfg['out'])
     root_target = os.path.join(ROOT, cfg['out']) if cfg['out'] else ROOT
     with open(os.path.join(folder, 'sign.json'), encoding='utf-8') as fh:
@@ -383,10 +386,17 @@ def build_figure(d, cfg):
     t, b, _, _ = silhouette_info(front, scale=UPSCALE)
     S = cfg['height'] / (b - t)
 
-    # Если есть живое видео (балерина), синхронизируем 3D-центр мешей standee.glb с силуэтом в live.mp4
+    has_live = os.path.exists(os.path.join(folder, 'live.mp4')) and os.path.exists(os.path.join(folder, 'live.json'))
+    # Если есть живое видео, синхронизируем 3D-центр мешей standee.glb с силуэтом в live.mp4
     target_center_3d = None
-    if cfg.get('live') and os.path.exists(os.path.join(folder, 'live.json')):
-        target_center_3d = 0.0468
+    if has_live:
+        with open(os.path.join(folder, 'live.json'), encoding='utf-8') as lfh:
+            lm0 = json.load(lfh)
+        if 'centerX' in lm0:
+            s_live = lm0.get('heightM', cfg['height']) / (lm0['bottom'] - lm0['top'])
+            target_center_3d = (lm0['centerX'] - lm0['feetX']) * s_live
+        else:
+            target_center_3d = 0.0468
 
     os.makedirs(out, exist_ok=True)
     os.makedirs(root_target, exist_ok=True)
@@ -405,7 +415,7 @@ def build_figure(d, cfg):
 
     with open(os.path.join(ROOT, 'index.html'), encoding='utf-8') as fh:
         page = fh.read()
-    if cfg.get('live') and os.path.exists(os.path.join(folder, 'live.mp4')):   # «живое фото»
+    if has_live:   # «живое фото»
         live_mp4_src = os.path.join(folder, 'live.mp4')
         shutil.copy2(live_mp4_src, os.path.join(out, 'live.mp4'))
         if os.path.abspath(root_target) != os.path.abspath(folder):
