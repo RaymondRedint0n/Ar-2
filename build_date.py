@@ -38,6 +38,7 @@ FIGURES = [
     {'assets': 'assets/balerina',   'out': 'balerina',   'height': 1.98, 'live': True},   # рука поднята, на пуантах; живое видео
     {'assets': 'assets/skripachka', 'out': 'skripachka', 'height': 1.74, 'live': True},   # скрипачка с табличкой; живое видео 2K
     {'assets': 'assets/xydochnica', 'out': 'xydochnica', 'height': 1.76, 'live': True},   # художница у мольберта; живое видео 2K
+    {'assets': 'assets/remontnica', 'out': 'remontnica', 'height': 1.70, 'live': True},
 ]
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля',
