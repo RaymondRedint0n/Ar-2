@@ -40,6 +40,7 @@ FIGURES = [
     {'assets': 'assets/xydochnica', 'out': 'xydochnica', 'height': 1.76, 'live': True},   # художница у мольберта; живое видео 2K
     {'assets': 'assets/remontnica', 'out': 'remontnica', 'height': 1.70, 'live': True},
     {'assets': 'assets/klych', 'out': 'klych', 'height': 1.35, 'live': True},
+    {'assets': 'assets/teleshka', 'out': 'teleshka', 'height': 1.72, 'live': True},
 ]
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля',
