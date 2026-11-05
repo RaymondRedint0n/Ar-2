@@ -653,8 +653,10 @@ function applyMaxAnisotropy(rootObj, maxAniso) {
   const targetAniso = Math.min(maxAniso, 8);
   rootObj.traverse((o) => {
     if (o.isMesh && o.material) {
-      const m = o.material;
-      if (m.map && m.map.generateMipmaps) { m.map.anisotropy = targetAniso; m.map.needsUpdate = true; }
+      for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+        const maps = [m.map, m.uniforms?.dateMap?.value];
+        for (const tex of maps) if (tex?.generateMipmaps) { tex.anisotropy = targetAniso; tex.needsUpdate = true; }
+      }
     }
   });
 }
@@ -669,7 +671,7 @@ function loadAll() {
       const g = await new GLTFLoader().loadAsync(MODEL);
       figure = g.scene;
       figure.traverse((o) => {
-        if (o.isMesh) {   // фото без освещения: без alphaToCoverage (вызывавшего мерцание сэмплов на iOS WebKit/Metal)
+        if (o.isMesh) {   // Фото с плавной прозрачностью и без изменения экспозиции.
           const m = o.material;
           if (m.map) {
             m.map.colorSpace = THREE.SRGBColorSpace;
@@ -680,7 +682,9 @@ function loadAll() {
           }
           o.material = new THREE.MeshBasicMaterial({
             map: m.map,
-            alphaTest: 0.5,
+            transparent: true,
+            depthWrite: false,
+            toneMapped: false,
             side: THREE.FrontSide
           });
         }
@@ -688,7 +692,7 @@ function loadAll() {
     } catch (err) {
       figure = await createProceduralStandee();
     }
-    await setupLive();
+    try { await setupLive(); } catch (err) { console.warn('Видео недоступно, оставлена статичная фигура', err); }
   })();
   loading.catch(() => { loading = null; });
   return loading;
@@ -712,78 +716,151 @@ async function setupLive() {
   v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
   document.body.appendChild(v);
 
-  /* Аппаратная сборка кадра без мипмапов на динамическом видео (пересборка мипмапов в каждом кадре на iPhone вызывала мерцание герцовки) */
-  const W = meta.w, H = meta.h;
-  const colorCanvas = document.createElement('canvas'); colorCanvas.width = W; colorCanvas.height = H;
-  const colorCtx = colorCanvas.getContext('2d');
-  const alphaCanvas = document.createElement('canvas'); alphaCanvas.width = W; alphaCanvas.height = H;
-  const alphaCtx = alphaCanvas.getContext('2d');
-
-  const tex = new THREE.CanvasTexture(colorCanvas); tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
-  const aTex = new THREE.CanvasTexture(alphaCanvas);
-  aTex.minFilter = THREE.LinearFilter; aTex.magFilter = THREE.LinearFilter; aTex.generateMipmaps = false;
-
-  const compose = () => {
-    const vw = (v.videoWidth >> 1) || W, vh = v.videoHeight || H;
-    colorCtx.drawImage(v, 0, 0, vw, vh, 0, 0, W, H);
-    alphaCtx.drawImage(v, vw, 0, vw, vh, 0, 0, W, H);
-    tex.needsUpdate = true;
-    aTex.needsUpdate = true;
-  };
-  const mat = new THREE.MeshBasicMaterial({
-    map: tex,
-    alphaMap: aTex,
-    alphaTest: 0.5,
-    side: THREE.FrontSide
+  // Статичная фигура остаётся видимой, пока не декодирован первый кадр.
+  await new Promise((resolve, reject) => {
+    if (v.readyState >= 2) { resolve(); return; }
+    const finish = (err) => {
+      clearTimeout(timer); v.removeEventListener('loadeddata', loaded); v.removeEventListener('error', failed);
+      if (err) { v.remove(); reject(err); } else resolve();
+    };
+    const loaded = () => finish();
+    const failed = () => finish(new Error('Не удалось декодировать live.mp4'));
+    const timer = setTimeout(failed, 20000);
+    v.addEventListener('loadeddata', loaded, { once: true });
+    v.addEventListener('error', failed, { once: true });
+    v.load();
   });
-  const S = meta.heightM / (meta.bottom - meta.top);   // метров на пиксель
+  if (v.videoWidth !== meta.w * 2 || v.videoHeight !== meta.h) {
+    v.remove(); throw new Error('Размер packed-видео не совпадает с live.json');
+  }
+  // Один VideoTexture вместо двух копирований canvas на каждом кадре.
+  // NoColorSpace сохраняет маску линейной; RGB переводится из sRGB в шейдере.
+  const tex = new THREE.VideoTexture(v);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+  const dTex = new THREE.CanvasTexture(await dateCanvas());
+  dTex.colorSpace = THREE.NoColorSpace;
+  dTex.minFilter = THREE.LinearMipmapLinearFilter; dTex.magFilter = THREE.LinearFilter;
+  const uniforms = {
+    packedFrame: { value: tex }, dateMap: { value: dTex },
+    frameSize: { value: new THREE.Vector2(meta.w, meta.h) },
+    cardProjection: { value: new THREE.Matrix3() }
+  };
+  const mat = new THREE.ShaderMaterial({
+    uniforms, side: THREE.FrontSide, transparent: true, depthWrite: false, toneMapped: false,
+    vertexShader: `
+      varying vec2 imageUV;
+      void main() {
+        imageUV = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D packedFrame;
+      uniform sampler2D dateMap;
+      uniform vec2 frameSize;
+      uniform mat3 cardProjection;
+      varying vec2 imageUV;
+      vec2 boundedUV(vec2 p) {
+        return clamp(p, 0.5 / frameSize, vec2(1.0) - 0.5 / frameSize);
+      }
+      float matte(vec2 p) {
+        p = boundedUV(p);
+        return texture2D(packedFrame, vec2(0.5 + p.x * 0.5, p.y)).r;
+      }
+      vec3 colorAt(vec2 p) {
+        p = boundedUV(p);
+        return texture2D(packedFrame, vec2(p.x * 0.5, p.y)).rgb;
+      }
+      vec3 toLinear(vec3 c) {
+        return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+      }
+      void main() {
+        float a = smoothstep(0.02, 0.98, matte(imageUV));
+        if (a < 0.004) discard;
+        vec3 c = colorAt(imageUV);
+        // Цвет соседнего плотного пикселя вытесняет фон из внешней каймы.
+        if (a < 0.85) {
+          float best = matte(imageUV);
+          vec2 bestUV = imageUV;
+          for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+              vec2 q = imageUV + vec2(float(x), float(y)) * 1.5 / frameSize;
+              float candidate = matte(q);
+              if (candidate > best) { best = candidate; bestUV = q; }
+            }
+          }
+          if (best > 0.9) c = mix(c, colorAt(bestUV), 1.0 - a);
+        }
+        // Дата вписана в тот же слой и сохраняет руку/палитру перед холстом.
+        vec2 pixel = vec2(imageUV.x, 1.0 - imageUV.y) * frameSize;
+        vec3 h = cardProjection * vec3(pixel, 1.0);
+        if (abs(h.z) > 0.00001) {
+          vec2 q = h.xy / h.z;
+          if (q.x >= 0.0 && q.y >= 0.0 && q.x <= 1.0 && q.y <= 1.0) {
+            float lo = min(c.r, min(c.g, c.b));
+            float hi = max(c.r, max(c.g, c.b));
+            float paper = smoothstep(0.64, 0.75, lo) * (1.0 - smoothstep(0.08, 0.15, hi - lo));
+            vec3 ink = texture2D(dateMap, vec2(q.x, 1.0 - q.y)).rgb;
+            c *= mix(vec3(1.0), ink, paper);
+          }
+        }
+        gl_FragColor = vec4(toLinear(c), a);
+        #include <colorspace_fragment>
+      }
+    `
+  });
+  const S = meta.heightM / (meta.bottom - meta.top);
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(meta.w * S, meta.h * S), mat);
   plane.position.set((meta.w / 2 - meta.feetX) * S, (meta.bottom - meta.h / 2) * S, 0.0015);
   plane.renderOrder = 1;
-
-  /* Табличка с датой: вынесена на z = 0.0085 (2.5 мм впереди плоскости видео z = 0.006), чтобы на iPhone не было Z-fighting мерцания */
-  const dTex = new THREE.CanvasTexture(await dateCanvas());
-  dTex.colorSpace = THREE.SRGBColorSpace;
-  dTex.minFilter = THREE.LinearMipmapLinearFilter;
-  dTex.magFilter = THREE.LinearFilter;
-  dTex.generateMipmaps = true;
-  dTex.anisotropy = 8;
-  const dGeo = new THREE.BufferGeometry();
-  dGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
-  dGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]), 2));
-  dGeo.setIndex([0, 3, 1, 1, 3, 2]);
-  const dMesh = new THREE.Mesh(dGeo, new THREE.MeshBasicMaterial({
-    map: dTex,
-    color: 0xffffff,
-    transparent: true,
-    blending: THREE.MultiplyBlending,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2
-  }));
-  dMesh.renderOrder = 2; dMesh.frustumCulled = false;
-  const front = figure.getObjectByName('front'); if (front) front.visible = false;
-  figure.add(plane); figure.add(dMesh);
-  live = { meta, video: v, tex, aTex, compose, lastT: -1, S, dGeo, last: -1 };
+  const front = figure.getObjectByName('front');
+  figure.add(plane);
+  live = { meta, video: v, tex, uniforms, S, last: -1, mediaTime: v.currentTime || 0 };
   updateLive(true);
+  if (front) front.visible = false;
+  if ('requestVideoFrameCallback' in v) {
+    const decoded = (_, frame) => {
+      live.mediaTime = frame.mediaTime;
+      updateLive(true);
+      v.requestVideoFrameCallback(decoded);
+    };
+    v.requestVideoFrameCallback(decoded);
+  }
 }
-function updateLive(force) {   // синхронно обновлять текстуру видео и табличку строго на частоте кадров видео (24 fps), а не 60/120 Гц экрана
+// Проективное преобразование: четыре точки холста -> UV даты. Билинейная
+// интерполяция четырёх вершин давала излом текста по диагонали двух треугольников.
+function cardHomography(points) {
+  const dest = [[0, 0], [1, 0], [1, 1], [0, 1]], rows = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = points[i], [u, v] = dest[i];
+    rows.push([x, y, 1, 0, 0, 0, -u*x, -u*y, u]);
+    rows.push([0, 0, 0, x, y, 1, -v*x, -v*y, v]);
+  }
+  for (let col = 0; col < 8; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < 8; r++) if (Math.abs(rows[r][col]) > Math.abs(rows[pivot][col])) pivot = r;
+    [rows[col], rows[pivot]] = [rows[pivot], rows[col]];
+    const div = rows[col][col];
+    if (Math.abs(div) < 1e-12) return null;
+    for (let k = col; k <= 8; k++) rows[col][k] /= div;
+    for (let r = 0; r < 8; r++) {
+      if (r === col) continue;
+      const factor = rows[r][col];
+      for (let k = col; k <= 8; k++) rows[r][k] -= factor * rows[col][k];
+    }
+  }
+  return [...rows.map(row => row[8]), 1];
+}
+function updateLive(force) {
   if (!live) return;
   if (live.video.paused && mode) live.video.play().catch(() => {});
-  const m = live.meta, n = m.frames;
-  const hasFrame = live.video.readyState >= 2 && !live.video.seeking;
-  const f = Math.min(n - 1, Math.floor((live.video.currentTime || 0) * m.fps) % n);
+  const m = live.meta;
+  const t = 'requestVideoFrameCallback' in live.video ? live.mediaTime : live.video.currentTime;
+  const f = Math.min(m.frames - 1, Math.max(0, Math.round((t || 0) * m.fps))) % m.frames;
   if (f === live.last && !force) return;
-  if (hasFrame) {
-    try { live.compose(); } catch (e) {}
-  } else if (!force) {
-    return;
-  }
-  live.last = f;
-  const q = m.sign[f], S = live.S, pos = live.dGeo.attributes.position;
-  for (let i = 0; i < 4; i++) pos.setXYZ(i, (q[i][0] - m.feetX) * S, (m.bottom - q[i][1]) * S, 0.003);
-  pos.needsUpdate = true; live.dGeo.computeBoundingSphere();
+  const h = cardHomography(m.sign[f]);
+  if (h) { live.uniforms.cardProjection.value.set(...h); live.last = f; }
 }
 function playLive() { if (live) live.video.play().catch(() => {}); }
 

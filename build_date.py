@@ -1,4 +1,4 @@
-"""Собирает сайт AR-фото: вписывает сегодняшнюю дату в табличку и собирает standee.glb в повышенном качестве (2K).
+"""Собирает сайт AR-фото: дата на табличке, GLB и полноцветная анимация USDZ.
 
 Запуск:  python build_date.py                 -> папка _site с index.html и standee.glb
          DATE=2026-12-31 python build_date.py  -> собрать на конкретную дату (для проверки)
@@ -27,7 +27,7 @@ TRANSFORM_PERSPECTIVE = getattr(Image, 'Transform', Image).PERSPECTIVE
 
 # Коэффициент повышения разрешения текстур модели (1.5x -> ~2560..2880px по высоте для максимальной чёткости лица и таблички)
 UPSCALE = 1.5
-MAX_FIG_HEIGHT = 2400
+MAX_FIG_HEIGHT = 2800
 
 # Девушки календаря. Новая девушка = папка в assets (front.png, back.png, sign.json) + строка здесь.
 #   assets — папка с картинками, out — папка на сайте ('' = главная страница),
@@ -40,8 +40,11 @@ FIGURES = [
     {'assets': 'assets/xydochnica', 'out': 'xydochnica', 'height': 1.76, 'live': True},   # художница у мольберта; живое видео 2K
     {'assets': 'assets/remontnica', 'out': 'remontnica', 'height': 1.70, 'live': True},
     {'assets': 'assets/klych', 'out': 'klych', 'height': 1.35, 'live': True},
-    {'assets': 'assets/teleshka', 'out': 'teleshka', 'height': 1.72, 'live': True},
 ]
+
+# В приложенном проекте есть только художница: собираем её в корень сайта.
+if not os.path.exists(os.path.join(A, 'front.png')):
+    FIGURES = [{'assets': 'assets/xydochnica', 'out': '', 'height': 1.76, 'live': True}]
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля',
           'августа', 'сентября', 'октября', 'ноября', 'декабря']
@@ -118,24 +121,23 @@ def perspective_coeffs(dst, src):
 
 def enhance_and_decontaminate(im, scale=UPSCALE):
     """Повышает детализацию текстуры (Lanczos + UnsharpMask) и очищает полупрозрачные края от белого ореола."""
+    im = im.convert('RGBA')
     if scale and abs(scale - 1.0) > 1e-3:
-        nw, nh = round(im.width * scale), round(im.height * scale)
-        rgb_im = im.convert('RGB').resize((nw, nh), RESAMPLE_LANCZOS)
-        rgb_im = rgb_im.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=3))
-        alpha_im = im.split()[3].resize((nw, nh), RESAMPLE_LANCZOS)
-    else:
-        rgb_im = im.convert('RGB').filter(ImageFilter.UnsharpMask(radius=1.0, percent=45, threshold=3))
-        alpha_im = im.split()[3]
-
-    c = np.array(rgb_im, dtype=np.uint8)
-    a = np.array(alpha_im, dtype=np.uint8)
-    # Заполняем внешние и полупрозрачные краевые пиксели цветом ближайшего плотного пикселя внутри фигуры (убирает светлую кайму)
+        # Pillow фильтрует RGBA с premultiplied alpha: фон не затекает в края.
+        im = im.resize((round(im.width * scale), round(im.height * scale)), RESAMPLE_LANCZOS)
+    c = np.array(im.convert('RGB').filter(ImageFilter.UnsharpMask(
+        radius=0.7, percent=35, threshold=4)))
+    a = np.array(im.getchannel('A'))
+    a[a < 3] = 0
     core = a > 210
     if np.any(core) and not np.all(core):
-        _, (iy, ix) = ndimage.distance_transform_edt(~core, return_indices=True)
-        edge_zone = ~core
-        c[edge_zone] = c[iy[edge_zone], ix[edge_zone]]
-    return Image.fromarray(np.dstack([c, a]), 'RGBA')
+        indices = ndimage.distance_transform_edt(~core, return_distances=False, return_indices=True)
+        # Цвет растягиваем только за край и на внешнюю кайму. Полупрозрачные
+        # детали внутри фигуры (перчатки, волосы) сохраняют собственный цвет.
+        inner_distance = ndimage.distance_transform_edt(a > 0)
+        edge = (a == 0) | ((a <= 210) & (inner_distance <= 2))
+        c[edge] = c[tuple(indices[:, edge])]
+    return Image.fromarray(np.dstack([c, a]))
 
 
 def front_with_date(d, meta, folder=A, scale=UPSCALE):
@@ -241,6 +243,7 @@ def export_standee_glb(front_im, back_im, height_m, out_path, target_center_3d=N
 
     gltf = {
         'asset': {'version': '2.0', 'generator': 'ar-foto-hq-builder'},
+        'extensionsUsed': ['KHR_materials_unlit'],
         'scene': 0,
         'scenes': [{'nodes': [0, 1]}],
         'nodes': [
@@ -275,10 +278,8 @@ def export_standee_glb(front_im, back_im, height_m, out_path, target_center_3d=N
                     'metallicFactor': 0.0,
                     'roughnessFactor': 1.0,
                 },
-                'emissiveTexture': {'index': 0},
-                'emissiveFactor': [0.22, 0.22, 0.22],
-                'alphaMode': 'MASK',
-                'alphaCutoff': 0.5,
+                'extensions': {'KHR_materials_unlit': {}},
+                'alphaMode': 'BLEND',
                 'doubleSided': False,
             },
             {
@@ -288,10 +289,8 @@ def export_standee_glb(front_im, back_im, height_m, out_path, target_center_3d=N
                     'metallicFactor': 0.0,
                     'roughnessFactor': 1.0,
                 },
-                'emissiveTexture': {'index': 1},
-                'emissiveFactor': [0.22, 0.22, 0.22],
-                'alphaMode': 'MASK',
-                'alphaCutoff': 0.5,
+                'extensions': {'KHR_materials_unlit': {}},
+                'alphaMode': 'BLEND',
                 'doubleSided': False,
             },
         ],
@@ -434,6 +433,8 @@ def build_figure(d, cfg):
 
     with open(os.path.join(ROOT, 'index.html'), encoding='utf-8') as fh:
         page = fh.read()
+    page = page.replace("var model=new URL('standee.glb?d='+d, location.href).href;",
+                        "var model=new URL('standee.glb?v=" + file_md5_tag(glb_path) + "&d='+d, location.href).href;")
     if has_live:   # «живое фото»
         live_mp4_src = os.path.join(folder, 'live.mp4')
         shutil.copy2(live_mp4_src, os.path.join(out, 'live.mp4'))
@@ -446,7 +447,7 @@ def build_figure(d, cfg):
             with open(os.path.join(dst_dir, 'live.json'), 'w', encoding='utf-8') as fh:
                 json.dump(lm, fh, separators=(',', ':'))
         try:
-            build_live_usdz(d, folder, out, back, S)
+            build_live_usdz(d, folder, out, back, S, front=front, target_center_3d=target_center_3d)
             usdz_tag = file_md5_tag(os.path.join(out, 'live.usdz'))
             if os.path.exists(os.path.join(out, 'live.usdz')):
                 shutil.copy2(os.path.join(out, 'live.usdz'), os.path.join(root_target, 'live.usdz'))
@@ -462,23 +463,29 @@ def build_figure(d, cfg):
     print('  ', cfg['out'] or '(главная)', '->', out, f'({front.size[0]}x{front.size[1]})')
 
 
-def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
-    """Живая фигура для AR от Apple (iPhone):
-    - fps=12 кратна и 24fps исходного видео (step=2), и экранам iPhone 60Hz (5x) / 120Hz ProMotion (10x);
-    - повышенное разрешение текстур (768x1152 вместо 512x1024) даёт 2x чёткость лица и платья в AR Quick Look;
-    - TPS=2400 (0.4 мс на тик) и перекрытие ключей [a, b] на 1 тик полностью исключают мерцание/провал масштаба между кадрами."""
+def build_live_usdz(d, folder, out, back, S_static, fps=24, scale=None, front=None, target_center_3d=None):
+    """AR Quick Look: полноцветные RGBA-кадры в исходном разрешении,
+    мягкая прозрачность, 24 fps и переключение без наложения двух кадров.
+    AR_USDZ_FPS=12 уменьшает размер файла при необходимости.
+    """
     import subprocess, tempfile
     from pxr import Usd, UsdGeom, UsdShade, UsdUtils, Sdf, Gf, Vt
     with open(os.path.join(folder, 'live.json'), encoding='utf-8') as fh:
         meta = json.load(fh)
+    fps = min(float(os.environ.get('AR_USDZ_FPS', fps)), meta['fps'])
+    if fps <= 0:
+        raise ValueError('AR_USDZ_FPS должен быть положительным')
     if scale is None:
-        scale = min(1.0, 1080 / meta['h'])
+        scale = min(1.0, 2048 / meta['h'])
     step = max(1, round(meta['fps'] / fps))
+    fps = meta['fps'] / step
     W, H = meta['w'], meta['h']
     tw, th = int(W * scale) // 2 * 2, int(H * scale) // 2 * 2
-    tmp = tempfile.mkdtemp(prefix='usdz_')
+    # Папка рядом с результатом: не зависит от наличия системной /tmp.
+    temp_owner = tempfile.TemporaryDirectory(prefix='usdz_', dir=out)
+    tmp = temp_owner.name
     subprocess.run(['ffmpeg', '-v', 'error', '-i', os.path.join(folder, 'live.mp4'),
-                    '-vf', f"select='not(mod(n\\,{step}))',scale={tw * 2}:{th}:flags=lanczos", '-fps_mode', 'passthrough',
+                    '-vf', f"select='not(mod(n\\,{step}))'", '-fps_mode', 'passthrough',
                     os.path.join(tmp, 'v%03d.png')], check=True)
     vframes = sorted(f for f in os.listdir(tmp) if f.startswith('v'))
     pp = meta.get('pingpong')            # видео «вперёд-назад»: текстуры берём только из прямого хода
@@ -489,12 +496,13 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
     card = sign_card(d, W=1200, H=1660)
     src = [(0, 0), (card.width, 0), (card.width, card.height), (0, card.height)]
     tex = os.path.join(tmp, 'tex'); os.makedirs(tex)
-    TEXW, TEXH = 768, 1152
+    TEXW, TEXH = tw, th
     k = tw / W
     for i, name in enumerate(vframes):
         with Image.open(os.path.join(tmp, name)) as raw_vf:
             im = np.array(raw_vf.convert('RGB'))
-        col = Image.fromarray(im[:, :tw]); al = Image.fromarray(im[:, tw:tw * 2, 0])
+        col = Image.fromarray(im[:, :W]).resize((tw, th), RESAMPLE_LANCZOS)
+        al = Image.fromarray(im[:, W:W * 2, 0]).resize((tw, th), RESAMPLE_LANCZOS)
         q = [(x * k, y * k) for x, y in meta['sign'][min(i * step, meta['frames'] - 1)]]
         warped = card.transform(col.size, TRANSFORM_PERSPECTIVE, perspective_coeffs(q, src), RESAMPLE_BICUBIC, fillcolor='white')
         mask = Image.new('L', col.size, 0); ImageDraw.Draw(mask).polygon(q, fill=255)
@@ -504,33 +512,29 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         m_paper = (ndimage.gaussian_filter(is_paper, sigma=0.8) * (np.array(mask) > 0).astype(float))[..., None]
         c = c * (1.0 - m_paper) + (c * ink) * m_paper
         an = np.array(al)
-        inside = an > 127
+        # Убираем шум кодека у нуля, сохраняя полупрозрачные пиксели.
+        af = np.clip((an.astype(np.float32) / 255 - 0.02) / 0.96, 0, 1)
+        an = np.round(af * 255).astype('uint8')
         c = c.clip(0, 255).astype('uint8')
-        _, (iy, ix) = ndimage.distance_transform_edt(~inside, return_indices=True)
-        c = c[iy, ix]                                   # снаружи — цвет ближайшего края фигуры, без тёмной каймы
-        rgba = Image.fromarray(np.dstack([c, np.where(inside, 255, 0).astype('uint8')]), 'RGBA')
-        fit_k = min(TEXW / rgba.width, TEXH / rgba.height)
-        rgba = rgba.resize((round(rgba.width * fit_k), round(rgba.height * fit_k)), RESAMPLE_LANCZOS)
-        a2 = np.array(rgba)[:, :, 3]; rgba.putalpha(Image.fromarray(np.where(a2 > 127, 255, 0).astype('uint8')))
-        canvas = Image.new('RGBA', (TEXW, TEXH), (0, 0, 0, 0))
-        canvas.paste(rgba, (0, 0))
-        cv = np.array(canvas); inside2 = cv[:, :, 3] > 0
-        _, (jy, jx) = ndimage.distance_transform_edt(~inside2, return_indices=True)
-        # Заполняем все прозрачные пиксели цветом ближайшего края фигуры (edge color bleed без чёрного фона)
-        cv[:, :, :3] = cv[:, :, :3][jy, jx]
-        rgba = Image.fromarray(cv, 'RGBA'); img_w, img_h = round(tw * fit_k), round(th * fit_k)
-        rgba.quantize(256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE) \
-            .save(os.path.join(tex, f'f{i:03d}.png'), optimize=True)
+        core = an > 230
+        if np.any(core):
+            indices = ndimage.distance_transform_edt(~core, return_distances=False, return_indices=True)
+            edge = (an == 0) | ((an < 210) & (ndimage.distance_transform_edt(an > 0) <= 2))
+            c[edge] = c[tuple(indices[:, edge])]
+        rgba = Image.fromarray(np.dstack([c, an]))
+        # Полноцветный PNG: без палитры из 256 цветов и повторного бинарного alpha.
+        rgba.save(os.path.join(tex, f'f{i:03d}.png'), compress_level=6)
+    img_w, img_h = tw, th
+    back.save(os.path.join(tex, 'back.png'), compress_level=6)
 
     def make(variant):
         usda = os.path.join(tmp, f'{variant}.usdc')
         st = Usd.Stage.CreateNew(usda)
         UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.y); UsdGeom.SetStageMetersPerUnit(st, 1.0)
-        # Высокая частота таймкодов (2400 делений в секунду = 0.4 мс на деление) + перекрытие соседних кадров на границе b:
-        # на экранах iPhone 60Hz / 120Hz ProMotion предыдущий кадр держит полный размер (1,1,1) до полного включения следующего.
-        TPS = 2400; span = TPS // fps; end = len(seq) * span
+        # 1/24000 секунды на переход масштаба; visibility исключает перекрытие кадров.
+        TPS = 24000; span = round(TPS / fps); end = len(seq) * span
         if variant != 'test-static':
-            st.SetStartTimeCode(0); st.SetEndTimeCode(end); st.SetTimeCodesPerSecond(TPS); st.SetFramesPerSecond(TPS)
+            st.SetStartTimeCode(0); st.SetEndTimeCode(end); st.SetTimeCodesPerSecond(TPS); st.SetFramesPerSecond(fps)
         root = UsdGeom.Xform.Define(st, '/Root'); st.SetDefaultPrim(root.GetPrim())
         UsdGeom.Scope.Define(st, '/Root/Materials')
 
@@ -552,17 +556,17 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
             tc.CreateOutput('rgb', Sdf.ValueTypeNames.Float3); tc.CreateOutput('a', Sdf.ValueTypeNames.Float)
             sh.CreateInput('diffuseColor', Sdf.ValueTypeNames.Color3f).ConnectToSource(tc.ConnectableAPI(), 'rgb')
             sh.CreateInput('opacity', Sdf.ValueTypeNames.Float).ConnectToSource(tc.ConnectableAPI(), 'a')
-            sh.CreateInput('opacityThreshold', Sdf.ValueTypeNames.Float).Set(0.5)
+            sh.CreateInput('opacityThreshold', Sdf.ValueTypeNames.Float).Set(0.0)
             m.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), 'surface')
             return m
 
-        def plane(path, pts, mat):
+        def plane(path, pts, mat, normal=1):
             mesh = UsdGeom.Mesh.Define(st, path)
             mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
             mesh.CreateFaceVertexCountsAttr([4]); mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
             mesh.CreateDoubleSidedAttr(False)
             mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
-            mesh.CreateNormalsAttr(Vt.Vec3fArray([Gf.Vec3f(0, 0, 1)] * 4)); mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+            mesh.CreateNormalsAttr(Vt.Vec3fArray([Gf.Vec3f(0, 0, normal)] * 4)); mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
             mesh.CreateExtentAttr(UsdGeom.Mesh.ComputeExtent(mesh.GetPointsAttr().Get()))
             pv = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar('st', Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex)
             pv.Set(Vt.Vec2fArray([Gf.Vec2f(0, 0), Gf.Vec2f(1, 0), Gf.Vec2f(1, 1), Gf.Vec2f(0, 1)]))
@@ -575,12 +579,23 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         yb = yt - (yt - yb) * TEXH / img_h
         cx, cy = (xl + xr) / 2, (yt + yb) / 2
         pts = [(xl - cx, yb - cy, 0), (xr - cx, yb - cy, 0), (xr - cx, yt - cy, 0), (xl - cx, yt - cy, 0)]
+        # Спина раньше вообще не попадала в live.usdz.
+        if front is not None and back.size == front.size:
+            _, bot, feet, center = silhouette_info(front)
+            origin = center - ((target_center_3d if target_center_3d is not None else (center - feet) * S_static) / S_static)
+            bo = back.width - origin
+            bx0, bx1 = bo * S_static, (bo - back.width) * S_static
+            by0 = -(back.height - 1 - bot) * S_static
+            by1 = by0 + back.height * S_static
+            plane('/Root/Back', [(bx0, by0, -GAP), (bx1, by0, -GAP),
+                                (bx1, by1, -GAP), (bx0, by1, -GAP)],
+                  material('Back', 'back.png'), normal=-1)
         UsdGeom.Xform.Define(st, '/Root/Live')
         tiny = Gf.Vec3f(0.0001, 0.0001, 0.0001)
         for i in (range(1) if variant == 'test-static' else range(n)):
             x = UsdGeom.Xform.Define(st, f'/Root/Live/F{i:03d}')
-            # Чередуем микро-ступеньку по Z (0.3 мм) между чётными и нечётными кадрами, чтобы на 0.4 мс перекрытии не было Z-fighting
-            z_frame = 0.01 + (i % 2) * 0.0003
+            # Все кадры лежат на одной глубине: силуэт не прыгает по Z.
+            z_frame = GAP
             x.AddTranslateOp().Set(Gf.Vec3d(cx, cy, z_frame))
             if variant == 'test-static':
                 plane(f'/Root/Live/F{i:03d}/Quad', pts, material(f'M{i:03d}', f'f{i:03d}.png'))
@@ -588,17 +603,28 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
             sop = x.AddScaleOp() if variant == 'live' else None
             one = Gf.Vec3f(1, 1, 1)
             keys = {}
-            for pos in [p for p, v in enumerate(seq) if v == i]:   # кадр держит полный размер [a, b] включительно (без провала на границе!)
+            for pos in [p for p, v in enumerate(seq) if v == i]:   # интервал [a, b)
                 a, b = pos * span, (pos + 1) * span
                 if a > 0: keys[a - 1] = tiny
-                keys[a] = one; keys[b] = one
-                if b + 1 <= end: keys[b + 1] = tiny
+                keys[a] = one; keys[b - 1] = one
+                keys[b] = tiny
             keys.setdefault(0, tiny)
-            last = max(p for p, v in enumerate(seq) if v == i)
-            keys[end] = one if (last + 1) * span == end else tiny
+            if i == seq[0] and len(seq) > 1:
+                keys[end - 1] = tiny
+            keys[end] = one if i == seq[0] else tiny
             if variant == 'live':
                 for t in sorted(keys):
                     sop.Set(keys[t], t)
+                # Видимость имеет held-интерполяцию: в каждый момент ровно один
+                # кадр. Scale оставлен для совместимости с AR Quick Look.
+                va = x.CreateVisibilityAttr()
+                active = False
+                for pos, frame in enumerate(seq):
+                    now = frame == i
+                    if pos == 0 or now != active:
+                        va.Set(UsdGeom.Tokens.inherited if now else UsdGeom.Tokens.invisible, pos * span)
+                    active = now
+                va.Set(UsdGeom.Tokens.inherited if i == seq[0] else UsdGeom.Tokens.invisible, end)
             else:
                 va = x.CreateVisibilityAttr()
                 for t in sorted(keys):
@@ -615,7 +641,7 @@ def build_live_usdz(d, folder, out, back, S_static, fps=12, scale=None):
         shutil.copy(os.path.join(tmp, f'{variant}.usdz'), os.path.join(out, f'{variant}.usdz'))
 
     make('live')
-    shutil.rmtree(tmp, ignore_errors=True)
+    temp_owner.cleanup()
     print('   live.usdz:', n, 'кадров,', len(seq), 'показов за круг,', os.path.getsize(os.path.join(out, 'live.usdz')) // 1024, 'КБ')
 
 
